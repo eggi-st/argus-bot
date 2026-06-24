@@ -168,4 +168,20 @@ function closeDryRunPosition(id, data) {
   `).run({ id, ...data })
 }
 
-module.exports = { initSchema, db, recordDecision, expireDecision, markFollowed, recordDryRunPosition, closeDryRunPosition }
+function recordWalletAction(data) {
+  return getStmt('insertWalletAction', `
+    INSERT OR IGNORE INTO wallet_actions
+      (detected_at, signature, action_type, pool_address, token_mint, token_symbol,
+       strategy, amount_sol, matched_decision_id, match_category)
+    VALUES
+      (@detected_at, @signature, @action_type, @pool_address, @token_mint, @token_symbol,
+       @strategy, @amount_sol, @matched_decision_id, @match_category)
+  `).run(data)
+}
+
+module.exports = {
+  initSchema, db,
+  recordDecision, expireDecision, markFollowed,
+  recordDryRunPosition, closeDryRunPosition,
+  recordWalletAction,
+}

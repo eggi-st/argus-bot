@@ -63,6 +63,13 @@ const DEFAULTS = {
     takeProfitPct: 50,    // close if price rises > 50% from entry
     maxHoldMinutes: 240,  // close after 4 hours regardless
   },
+  wallet: {
+    // Set your Solana wallet address in user-config.json to enable observation.
+    // Argus will poll for on-chain Meteora DLMM actions every pollIntervalMs ms.
+    address: null,
+    rpcUrl: 'https://api.mainnet-beta.solana.com',
+    pollIntervalMs: 30_000,
+  },
 }
 
 function deepMerge(base, override) {

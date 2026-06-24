@@ -49,7 +49,7 @@
 <body>
   <header>
     <div id="status-dot"></div>
-    <h1>🦅 ARGUS <span>v0.2.0 — Phase 0</span></h1>
+    <h1>🦅 ARGUS <span>v0.3.0 — Phase 0</span></h1>
     <div style="margin-left:auto; color: var(--muted); font-size: 12px;" id="ts">—</div>
   </header>
   <main>
@@ -60,8 +60,8 @@
         <span class="phase-item done">✓ Phase 0 — Foundation</span>
         <span class="phase-item done">✓ Phase 1 — Intelligence Core</span>
         <span class="phase-item done">✓ Phase 2 — Dry Run Engine</span>
-        <span class="phase-item next">⏳ Phase 3 — Wallet Observer</span>
-        <span class="phase-item pending">Phase 4 — AI + Learning</span>
+        <span class="phase-item done">✓ Phase 3 — Wallet Observer</span>
+        <span class="phase-item next">⏳ Phase 4 — AI + Learning</span>
       </div>
     </div>
 
@@ -78,6 +78,14 @@
       <div class="metric"><span class="metric-label">Open Positions</span><span class="metric-value" id="open-count">—</span></div>
       <div class="metric"><span class="metric-label">Daily Loss</span><span class="metric-value" id="daily-loss">—</span></div>
       <div class="metric"><span class="metric-label">Blacklisted Tokens</span><span class="metric-value" id="bl-count">—</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Wallet Observer</h2>
+      <div class="metric"><span class="metric-label">Status</span><span id="wo-status" class="pill muted">—</span></div>
+      <div class="metric"><span class="metric-label">Wallet</span><span class="metric-value" id="wo-addr">—</span></div>
+      <div class="metric"><span class="metric-label">Actions (today)</span><span class="metric-value" id="wo-count">—</span></div>
+      <div class="metric"><span class="metric-label">Followed Argus</span><span class="metric-value" id="wo-followed">—</span></div>
     </div>
 
     <div class="card">
@@ -98,6 +106,11 @@
     <div class="card" style="grid-column:1/-1;">
       <h2>Dry Run Positions</h2>
       <div id="dryrun-table" style="font-size:12px;color:var(--muted);">No dry run positions yet.</div>
+    </div>
+
+    <div class="card" style="grid-column:1/-1;">
+      <h2>Wallet Actions</h2>
+      <div id="wallet-table" style="font-size:12px;color:var(--muted);">Wallet Observer disabled — set wallet.address in user-config.json.</div>
     </div>
 
     <div class="card" style="grid-column:1/-1;">
@@ -198,6 +211,54 @@
       }).catch(() => {})
     }
 
+    function loadWalletActions() {
+      fetch('/api/wallet-actions?limit=10').then(r => r.json()).then(d => {
+        const st = d.status || {}
+        const woEl = document.getElementById('wo-status')
+        woEl.textContent = st.active ? 'Active' : 'Inactive'
+        woEl.className = 'pill ' + (st.active ? 'green' : 'muted')
+        document.getElementById('wo-addr').textContent = st.walletAddress
+          ? st.walletAddress.slice(0, 8) + '…'
+          : 'Not configured'
+
+        const today = new Date().toISOString().slice(0, 10)
+        const todayActions = (d.actions || []).filter(a => a.detected_at?.startsWith(today))
+        const followed = todayActions.filter(a => a.match_category === 'followed')
+        document.getElementById('wo-count').textContent = todayActions.length
+        document.getElementById('wo-followed').textContent = followed.length
+
+        const el = document.getElementById('wallet-table')
+        if (!st.walletAddress) return
+        if (!d.actions?.length) {
+          el.textContent = 'No on-chain actions detected yet.'
+          return
+        }
+        const ACTION_ICON = {
+          add_liquidity: '↑', remove_liquidity: '↓', claim_fees: '$',
+          open_position: '+', close_position: '×',
+        }
+        const rows = d.actions.slice(0, 10).map(a => {
+          const ts = new Date(a.detected_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+          const icon = ACTION_ICON[a.action_type] || '?'
+          const matchPill = a.match_category === 'followed'
+            ? `<span class="pill green">followed</span>`
+            : `<span class="pill muted">user_only</span>`
+          const poolStr = a.pool_address ? a.pool_address.slice(0, 8) + '…' : '—'
+          const tokStr = a.token_mint
+            ? `<a href="https://dexscreener.com/solana/${a.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none;">${a.token_symbol || a.token_mint.slice(0, 8)}</a>`
+            : (a.token_symbol || poolStr)
+          return `<div style="display:grid;grid-template-columns:40px 120px 100px 100px 1fr;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)">` +
+            `<span style="color:var(--muted)">${ts}</span>` +
+            `<span>${icon} ${(a.action_type || '').replace(/_/g,' ')}</span>` +
+            `<span>${tokStr}</span>` +
+            `<span>${matchPill}</span>` +
+            `<span style="color:var(--muted);font-size:11px">${a.strategy || '—'}</span>` +
+            `</div>`
+        }).join('')
+        el.innerHTML = `<div style="display:grid;grid-template-columns:40px 120px 100px 100px 1fr;gap:8px;padding:0 0 6px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Time</span><span>Action</span><span>Token</span><span>Match</span><span>Strategy</span></div>${rows}`
+      }).catch(() => {})
+    }
+
     function triggerScan() {
       const btn = document.getElementById('scan-btn')
       btn.textContent = '⏳ Scanning…'
@@ -223,12 +284,14 @@
         })
         loadDecisions()
         loadDryRun()
+        loadWalletActions()
       }
       ws.onmessage = ({ data }) => {
         const msg = JSON.parse(data)
         if (msg.type === 'init' || msg.type === 'risk_update') updateRisk(msg.risk)
         if (msg.type === 'scan_result' || msg.type === 'recommendation_expired') { loadDecisions(); loadDryRun() }
         if (msg.type === 'dry_run_closed') loadDryRun()
+        if (msg.type === 'wallet_action_detected' || msg.type === 'wallet_action') loadWalletActions()
         if (msg.type !== 'pong') {
           const summary = msg.type === 'scan_result'
             ? `scan_result: ${msg.decisions} decisions from ${msg.candidates} candidates (${msg.elapsed_ms}ms)`

@@ -108,7 +108,22 @@ app.get('/api/dry-run', (req, res) => {
   }
 })
 app.get('/api/pattern-library', (req, res) => res.json({ patterns: [], phase: 2 }))
-app.get('/api/wallet-actions', (req, res) => res.json({ actions: [], phase: 3 }))
+
+app.get('/api/wallet-actions', (req, res) => {
+  try {
+    const wallet = require('./wallet/index')
+    const limit = Math.min(parseInt(req.query.limit || '30', 10), 200)
+    const actions = db.prepare(`
+      SELECT id, detected_at, action_type, pool_address, token_mint, token_symbol,
+             strategy, amount_sol, matched_decision_id, match_category
+      FROM wallet_actions
+      ORDER BY detected_at DESC LIMIT ?
+    `).all(limit)
+    res.json({ actions, status: wallet.observer.getStatus() })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
@@ -147,6 +162,7 @@ function setupWebSocket(server) {
   bus.onFast('recommendation_expired', (payload) => broadcast({ type: 'recommendation_expired', ...payload }))
   bus.onFast('scan_complete', (payload) => broadcast({ type: 'scan_complete', ...payload }))
   bus.onFast('alert_triggered', (payload) => broadcast({ type: 'alert_triggered', ...payload }))
+  bus.onSlow('wallet_action_detected', (payload) => broadcast({ type: 'wallet_action_detected', ...payload }))
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────

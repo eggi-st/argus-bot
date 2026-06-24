@@ -9,7 +9,7 @@
 
 async function init() {
   console.log('\n' + '─'.repeat(50))
-  console.log('  🦅  ARGUS  v0.2.0')
+  console.log('  🦅  ARGUS  v0.3.0')
   console.log('─'.repeat(50) + '\n')
 
   // ── Layer 0: Event Bus ───────────────────────────────────────────────────
@@ -37,10 +37,15 @@ async function init() {
   dryRun.init()
   console.log('✓')
 
-  // ── Layer 3: Scheduler ───────────────────────────────────────────────────
+  // ── Layer 3: Scheduler + Wallet Observer ─────────────────────────────────
   process.stdout.write('[Init] Layer 3 · Scheduler... ')
   const scheduler = require('./scheduler')
   scheduler.start()
+  console.log('✓')
+
+  process.stdout.write('[Init] Layer 3 · Wallet Observer... ')
+  const wallet = require('../wallet/index')
+  wallet.init()
   console.log('✓')
 
   // ── Layer 4: Notifications + Web Server ──────────────────────────────────
