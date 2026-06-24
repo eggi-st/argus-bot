@@ -9,7 +9,7 @@
 
 async function init() {
   console.log('\n' + '─'.repeat(50))
-  console.log('  🦅  ARGUS  v0.1.0')
+  console.log('  🦅  ARGUS  v0.2.0')
   console.log('─'.repeat(50) + '\n')
 
   // ── Layer 0: Event Bus ───────────────────────────────────────────────────
@@ -31,8 +31,9 @@ async function init() {
 
   // ── Layer 2: Intelligence Core ───────────────────────────────────────────
   process.stdout.write('[Init] Layer 2 · Intelligence Core... ')
-  // TODO Phase 1: screener, indicator engine, strategy router, AI analyzer
-  console.log('⏳  Phase 1 — coming soon')
+  const ic = require('../intelligence/index')
+  ic.init()
+  console.log('✓')
 
   // ── Layer 3: Scheduler ───────────────────────────────────────────────────
   process.stdout.write('[Init] Layer 3 · Scheduler... ')

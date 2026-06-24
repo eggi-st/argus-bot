@@ -49,7 +49,7 @@
 <body>
   <header>
     <div id="status-dot"></div>
-    <h1>🦅 ARGUS <span>v0.1.0 — Phase 0</span></h1>
+    <h1>🦅 ARGUS <span>v0.2.0 — Phase 0</span></h1>
     <div style="margin-left:auto; color: var(--muted); font-size: 12px;" id="ts">—</div>
   </header>
   <main>
@@ -57,9 +57,9 @@
       <h2>Build Progress</h2>
       <p style="color:var(--muted); font-size:13px;">Fase 0 selesai. Intelligence Core dan Dry Run Engine menyusul.</p>
       <div class="phase-list">
-        <span class="phase-item done">✓ Phase 0 — Fondasi</span>
-        <span class="phase-item next">⏳ Phase 1 — Intelligence Core</span>
-        <span class="phase-item pending">Phase 2 — Dry Run Engine</span>
+        <span class="phase-item done">✓ Phase 0 — Foundation</span>
+        <span class="phase-item done">✓ Phase 1 — Intelligence Core</span>
+        <span class="phase-item next">⏳ Phase 2 — Dry Run Engine</span>
         <span class="phase-item pending">Phase 3 — Wallet Observer</span>
         <span class="phase-item pending">Phase 4 — AI + Learning</span>
       </div>
@@ -81,32 +81,82 @@
     </div>
 
     <div class="card" style="grid-column:1/-1;">
+      <h2>Active Decisions
+        <button id="scan-btn" onclick="triggerScan()" style="float:right;background:var(--blue);color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:11px;">▶ Scan Now</button>
+      </h2>
+      <div id="decisions-table" style="font-size:12px;color:var(--muted);line-height:2;">No decisions yet — waiting for first scan…</div>
+    </div>
+
+    <div class="card" style="grid-column:1/-1;">
       <h2>Live Events</h2>
-      <div id="log">Menunggu koneksi WebSocket…</div>
+      <div id="log" style="font-size:12px;font-family:monospace;color:var(--muted);line-height:1.8;">Waiting for WebSocket connection…</div>
     </div>
   </main>
 
   <script>
-    const log = document.getElementById('log')
+    const logEl = document.getElementById('log')
     const dot = document.getElementById('status-dot')
     let ws, lines = []
+
+    const STRATEGY_COLOR = { spot: 'green', bid_ask: 'yellow', limit_order: 'blue' }
 
     function addLog(msg) {
       const t = new Date().toLocaleTimeString('id-ID')
       lines.unshift(`[${t}] ${msg}`)
-      if (lines.length > 30) lines.pop()
-      log.textContent = lines.join('\n')
+      if (lines.length > 40) lines.pop()
+      logEl.textContent = lines.join('\n')
     }
 
     function updateRisk(risk) {
       const cb = document.getElementById('cb-status')
-      cb.textContent = risk.circuit_breaker_open ? 'OPEN 🔴' : 'clear'
+      cb.textContent = risk.circuit_breaker_open ? 'OPEN' : 'clear'
       cb.className = 'pill ' + (risk.circuit_breaker_open ? 'red' : 'green')
       document.getElementById('open-count').textContent =
         `${risk.current_open_count} / ${risk.limits?.max_open_positions || 5}`
       document.getElementById('daily-loss').textContent =
         `$${(risk.daily_realized_loss_usd || 0).toFixed(2)} / $${risk.limits?.max_daily_loss_usd || 50}`
       document.getElementById('bl-count').textContent = (risk.blacklisted_tokens || []).length
+    }
+
+    function loadDecisions() {
+      fetch('/api/candidates?limit=20&status=active').then(r => r.json()).then(d => {
+        const el = document.getElementById('decisions-table')
+        if (!d.decisions || d.decisions.length === 0) {
+          el.textContent = 'No active decisions — trigger a scan or wait for next cycle (every 15min).'
+          return
+        }
+        const rows = d.decisions.map(dec => {
+          const ind = dec.indicators || {}
+          const athStr = ind.price_vs_ath_pct != null ? `${ind.price_vs_ath_pct}% ATH` : '—'
+          const volStr = ind.volatility != null ? `vol ${ind.volatility}` : '—'
+          const feeTvlStr = ind.fee_active_tvl_ratio != null ? `${(ind.fee_active_tvl_ratio*100).toFixed(1)}% fee/tvl` : '—'
+          const color = STRATEGY_COLOR[dec.strategy] || 'muted'
+          const pct = Math.round((dec.confidence || 0) * 100)
+          const exp = new Date(dec.expires_at).toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' })
+          const dexLink = dec.token_mint
+            ? `<a href="https://dexscreener.com/solana/${dec.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none;" title="DexScreener">${dec.token_symbol || dec.token_mint.slice(0,8)}</a>`
+            : (dec.token_symbol || '?')
+          return `<div style="display:grid;grid-template-columns:100px 100px 120px 1fr 60px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);">` +
+            `<span>${dexLink}</span>` +
+            `<span><span class="pill ${color}">${dec.strategy}</span></span>` +
+            `<span style="color:var(--muted)">${athStr} · ${volStr}</span>` +
+            `<span style="color:var(--muted);font-size:11px">${feeTvlStr} · ${dec.condition_bucket || ''}</span>` +
+            `<span style="color:var(--muted);font-size:11px;text-align:right">exp ${exp}</span>` +
+            `</div>`
+        }).join('')
+        el.innerHTML = `<div style="display:grid;grid-template-columns:100px 100px 120px 1fr 60px;gap:8px;padding:0 0 6px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Token</span><span>Strategy</span><span>Key Signals</span><span>Condition</span><span style="text-align:right">Expires</span></div>${rows}`
+      }).catch(() => {})
+    }
+
+    function triggerScan() {
+      const btn = document.getElementById('scan-btn')
+      btn.textContent = '⏳ Scanning…'
+      btn.disabled = true
+      fetch('/api/scan/run', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => addLog('Manual scan triggered — results via WebSocket'))
+        .catch(e => addLog('Scan trigger failed: ' + e.message))
+        .finally(() => { setTimeout(() => { btn.textContent = '▶ Scan Now'; btn.disabled = false }, 3000) })
     }
 
     function connect() {
@@ -121,11 +171,20 @@
           document.getElementById('sched-status').textContent = d.scheduler.length + ' jobs'
           document.getElementById('ts').textContent = new Date(d.ts).toLocaleString('id-ID')
         })
+        loadDecisions()
       }
       ws.onmessage = ({ data }) => {
         const msg = JSON.parse(data)
         if (msg.type === 'init' || msg.type === 'risk_update') updateRisk(msg.risk)
-        if (msg.type !== 'pong') addLog(JSON.stringify(msg))
+        if (msg.type === 'scan_result' || msg.type === 'recommendation_expired') loadDecisions()
+        if (msg.type !== 'pong') {
+          const summary = msg.type === 'scan_result'
+            ? `scan_result: ${msg.decisions} decisions from ${msg.candidates} candidates (${msg.elapsed_ms}ms)`
+            : msg.type === 'scan_error'
+            ? `scan_error: ${msg.error}`
+            : JSON.stringify(msg)
+          addLog(summary)
+        }
       }
       ws.onclose = () => {
         dot.className = 'offline'

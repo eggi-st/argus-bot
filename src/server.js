@@ -15,10 +15,12 @@ app.use(express.static(path.join(__dirname, '../public')))
 
 // ── API Routes ────────────────────────────────────────────────────────────────
 
+const { version } = require('../package.json')
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    version: '0.1.0',
+    version,
     ts: Date.now(),
     uptime: process.uptime(),
     scheduler: scheduler.getStatus(),
@@ -44,8 +46,45 @@ app.post('/api/blacklist', (req, res) => {
   res.json({ ok: true })
 })
 
-// Placeholders for future phases
-app.get('/api/candidates', (req, res) => res.json({ candidates: [], phase: 1 }))
+// Active decisions — what Argus is currently recommending
+app.get('/api/candidates', (req, res) => {
+  try {
+    const db = require('./db/database')
+    const limit = Math.min(parseInt(req.query.limit || '20', 10), 100)
+    const status = req.query.status || 'active'
+    const rows = db.prepare(
+      `SELECT id, created_at, expires_at, token_symbol, token_mint, pool_address,
+              strategy, confidence, condition_bucket, status, llm_verdict,
+              indicators_json, strategy_scores_json
+       FROM decisions WHERE status = ?
+       ORDER BY created_at DESC LIMIT ?`
+    ).all(status, limit)
+    // Parse JSON fields for convenience
+    const parsed = rows.map(r => ({
+      ...r,
+      indicators: r.indicators_json ? JSON.parse(r.indicators_json) : null,
+      strategy_scores: r.strategy_scores_json ? JSON.parse(r.strategy_scores_json) : null,
+      indicators_json: undefined,
+      strategy_scores_json: undefined,
+    }))
+    res.json({ decisions: parsed, count: parsed.length })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Manual scan trigger — useful for testing without waiting 15min
+app.post('/api/scan/run', async (req, res) => {
+  try {
+    const ic = require('./intelligence/index')
+    // Fire-and-forget — results pushed via WebSocket
+    ic.runScan().catch(err => console.error('[Server] Manual scan error:', err.message))
+    res.json({ ok: true, message: 'Scan triggered — watch WebSocket for results' })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 app.get('/api/dry-run', (req, res) => res.json({ positions: [], phase: 2 }))
 app.get('/api/pattern-library', (req, res) => res.json({ patterns: [], phase: 2 }))
 app.get('/api/wallet-actions', (req, res) => res.json({ actions: [], phase: 3 }))

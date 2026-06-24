@@ -1,6 +1,6 @@
 {
   "name": "argus",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Argus — DLMM Intelligence Assistant for Solana",
   "main": "argus.js",
   "scripts": {
