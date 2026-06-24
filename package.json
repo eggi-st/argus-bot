@@ -1,0 +1,23 @@
+{
+  "name": "argus",
+  "version": "0.1.0",
+  "description": "Argus — DLMM Intelligence Assistant for Solana",
+  "main": "argus.js",
+  "scripts": {
+    "start": "node argus.js",
+    "dev": "node --watch argus.js"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.0",
+    "better-sqlite3": "^12.11.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^2.7.0",
+    "node-notifier": "^10.0.1",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

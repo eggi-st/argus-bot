@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Argus</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --bg2: #1e293b;
+      --border: #334155;
+      --text: #e2e8f0;
+      --muted: #64748b;
+      --green: #22c55e;
+      --yellow: #f59e0b;
+      --red: #ef4444;
+      --blue: #3b82f6;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: system-ui, monospace; font-size: 14px; }
+    header { display: flex; align-items: center; gap: 12px; padding: 16px 24px; border-bottom: 1px solid var(--border); }
+    header h1 { font-size: 18px; letter-spacing: 2px; font-weight: 700; }
+    header h1 span { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 8px; }
+    #status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+    #status-dot.online { background: var(--green); }
+    #status-dot.offline { background: var(--red); }
+    main { padding: 24px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+    .card h2 { font-size: 11px; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; margin-bottom: 12px; }
+    .metric { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
+    .metric:last-child { border-bottom: none; }
+    .metric-label { color: var(--muted); }
+    .metric-value { font-weight: 600; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .pill.green { background: rgba(34,197,94,.15); color: var(--green); }
+    .pill.red { background: rgba(239,68,68,.15); color: var(--red); }
+    .pill.yellow { background: rgba(245,158,11,.15); color: var(--yellow); }
+    .pill.muted { background: rgba(100,116,139,.15); color: var(--muted); }
+    .phase-banner { grid-column: 1/-1; background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--blue); border-radius: 8px; padding: 20px 24px; }
+    .phase-banner h2 { color: var(--blue); font-size: 13px; margin-bottom: 8px; }
+    .phase-list { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .phase-item { padding: 6px 12px; border-radius: 4px; font-size: 12px; }
+    .phase-item.done { background: rgba(34,197,94,.1); color: var(--green); border: 1px solid rgba(34,197,94,.2); }
+    .phase-item.next { background: rgba(245,158,11,.1); color: var(--yellow); border: 1px solid rgba(245,158,11,.2); }
+    .phase-item.pending { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
+    #log { font-size: 12px; font-family: monospace; color: var(--muted); line-height: 1.8; }
+  </style>
+</head>
+<body>
+  <header>
+    <div id="status-dot"></div>
+    <h1>🦅 ARGUS <span>v0.1.0 — Phase 0</span></h1>
+    <div style="margin-left:auto; color: var(--muted); font-size: 12px;" id="ts">—</div>
+  </header>
+  <main>
+    <div class="phase-banner">
+      <h2>Build Progress</h2>
+      <p style="color:var(--muted); font-size:13px;">Fase 0 selesai. Intelligence Core dan Dry Run Engine menyusul.</p>
+      <div class="phase-list">
+        <span class="phase-item done">✓ Phase 0 — Fondasi</span>
+        <span class="phase-item next">⏳ Phase 1 — Intelligence Core</span>
+        <span class="phase-item pending">Phase 2 — Dry Run Engine</span>
+        <span class="phase-item pending">Phase 3 — Wallet Observer</span>
+        <span class="phase-item pending">Phase 4 — AI + Learning</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>System Status</h2>
+      <div class="metric"><span class="metric-label">Connection</span><span id="conn-status" class="pill muted">Connecting…</span></div>
+      <div class="metric"><span class="metric-label">Uptime</span><span class="metric-value" id="uptime">—</span></div>
+      <div class="metric"><span class="metric-label">Scheduler</span><span class="metric-value" id="sched-status">—</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Risk State</h2>
+      <div class="metric"><span class="metric-label">Circuit Breaker</span><span id="cb-status" class="pill muted">—</span></div>
+      <div class="metric"><span class="metric-label">Open Positions</span><span class="metric-value" id="open-count">—</span></div>
+      <div class="metric"><span class="metric-label">Daily Loss</span><span class="metric-value" id="daily-loss">—</span></div>
+      <div class="metric"><span class="metric-label">Blacklisted Tokens</span><span class="metric-value" id="bl-count">—</span></div>
+    </div>
+
+    <div class="card" style="grid-column:1/-1;">
+      <h2>Live Events</h2>
+      <div id="log">Menunggu koneksi WebSocket…</div>
+    </div>
+  </main>
+
+  <script>
+    const log = document.getElementById('log')
+    const dot = document.getElementById('status-dot')
+    let ws, lines = []
+
+    function addLog(msg) {
+      const t = new Date().toLocaleTimeString('id-ID')
+      lines.unshift(`[${t}] ${msg}`)
+      if (lines.length > 30) lines.pop()
+      log.textContent = lines.join('\n')
+    }
+
+    function updateRisk(risk) {
+      const cb = document.getElementById('cb-status')
+      cb.textContent = risk.circuit_breaker_open ? 'OPEN 🔴' : 'clear'
+      cb.className = 'pill ' + (risk.circuit_breaker_open ? 'red' : 'green')
+      document.getElementById('open-count').textContent =
+        `${risk.current_open_count} / ${risk.limits?.max_open_positions || 5}`
+      document.getElementById('daily-loss').textContent =
+        `$${(risk.daily_realized_loss_usd || 0).toFixed(2)} / $${risk.limits?.max_daily_loss_usd || 50}`
+      document.getElementById('bl-count').textContent = (risk.blacklisted_tokens || []).length
+    }
+
+    function connect() {
+      ws = new WebSocket(`ws://127.0.0.1:${location.port || 4000}`)
+      ws.onopen = () => {
+        dot.className = 'online'
+        document.getElementById('conn-status').textContent = 'Connected'
+        document.getElementById('conn-status').className = 'pill green'
+        addLog('WebSocket connected')
+        fetch('/api/health').then(r => r.json()).then(d => {
+          document.getElementById('uptime').textContent = Math.floor(d.uptime) + 's'
+          document.getElementById('sched-status').textContent = d.scheduler.length + ' jobs'
+          document.getElementById('ts').textContent = new Date(d.ts).toLocaleString('id-ID')
+        })
+      }
+      ws.onmessage = ({ data }) => {
+        const msg = JSON.parse(data)
+        if (msg.type === 'init' || msg.type === 'risk_update') updateRisk(msg.risk)
+        if (msg.type !== 'pong') addLog(JSON.stringify(msg))
+      }
+      ws.onclose = () => {
+        dot.className = 'offline'
+        document.getElementById('conn-status').textContent = 'Disconnected'
+        document.getElementById('conn-status').className = 'pill red'
+        addLog('Disconnected — reconnecting in 3s…')
+        setTimeout(connect, 3000)
+      }
+    }
+
+    setInterval(() => ws?.readyState === 1 && ws.send(JSON.stringify({ type: 'ping' })), 30000)
+    connect()
+  </script>
+</body>
+</html>
