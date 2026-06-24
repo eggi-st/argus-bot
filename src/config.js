@@ -70,6 +70,16 @@ const DEFAULTS = {
     rpcUrl: 'https://api.mainnet-beta.solana.com',
     pollIntervalMs: 30_000,
   },
+  ai: {
+    // LLM verdict generation via OpenAI-compatible endpoint.
+    // Compatible with SumoPod, Ollama (default), LM Studio, etc.
+    // Set enabled: true in user-config.json to activate.
+    enabled: false,
+    sumopodUrl: 'http://localhost:11434/v1/chat/completions',
+    model: 'llama3',
+    maxTokens: 100,
+    timeoutMs: 20_000,
+  },
 }
 
 function deepMerge(base, override) {

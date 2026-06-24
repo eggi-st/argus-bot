@@ -9,7 +9,7 @@
 
 async function init() {
   console.log('\n' + '─'.repeat(50))
-  console.log('  🦅  ARGUS  v0.3.0')
+  console.log('  🦅  ARGUS  v0.4.0')
   console.log('─'.repeat(50) + '\n')
 
   // ── Layer 0: Event Bus ───────────────────────────────────────────────────
@@ -48,12 +48,18 @@ async function init() {
   wallet.init()
   console.log('✓')
 
-  // ── Layer 4: Notifications + Web Server ──────────────────────────────────
-  process.stdout.write('[Init] Layer 4 · Telegram... ')
+  // ── Layer 4: Learning + AI ───────────────────────────────────────────────
+  process.stdout.write('[Init] Layer 4 · Pattern Library... ')
+  const learning = require('../learning/index')
+  learning.init()
+  console.log('✓')
+
+  // ── Layer 5: Notifications + Web Server ──────────────────────────────────
+  process.stdout.write('[Init] Layer 5 · Telegram... ')
   const telegram = require('../notifications/telegram')
   await telegram.init()
 
-  process.stdout.write('[Init] Layer 4 · Web server... ')
+  process.stdout.write('[Init] Layer 5 · Web server... ')
   const server = require('../server')
   await server.start()
   console.log('✓')

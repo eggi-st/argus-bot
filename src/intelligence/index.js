@@ -5,6 +5,9 @@ const { recordDecision } = require('../db/schema')
 const { getTopCandidates } = require('./screener')
 const { chooseStrategy, scoreStrategies } = require('./strategy-router')
 const { getConfig } = require('../config')
+const { parseBucket }      = require('../learning/pattern-updater')
+const { getPattern, adjustScore } = require('../learning/pattern-reader')
+const { generateVerdict }  = require('../ai/verdict-generator')
 
 let _scanning = false
 
@@ -92,6 +95,14 @@ async function runScan() {
       const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString()
       const bucket = conditionBucket(pool)
 
+      // Pattern Library: adjust confidence based on historical win rate
+      const { volatility_bucket, regime } = parseBucket(bucket)
+      const pattern = getPattern(volatility_bucket, regime, best.strategy)
+      const confidence = adjustScore(best.score, pattern)
+      if (pattern?.active) {
+        console.log(`[IC] Pattern ${volatility_bucket}×${regime}×${best.strategy}: win=${(pattern.win_rate*100).toFixed(0)}% N=${pattern.sample_count} → confidence ${(best.score*100).toFixed(0)}→${(confidence*100).toFixed(0)}`)
+      }
+
       const indicators = {
         volatility: pool.volatility,
         fee_active_tvl_ratio: pool.fee_active_tvl_ratio,
@@ -122,7 +133,7 @@ async function runScan() {
           indicators_json: JSON.stringify(indicators),
           strategy_scores_json: JSON.stringify(allScores),
           llm_verdict: null,
-          confidence: best.score,
+          confidence,
           condition_bucket: bucket,
         })
 
@@ -133,8 +144,14 @@ async function runScan() {
         const dryRun = require('../dry-run/engine')
         dryRun.openForDecision(decisionId, pool, best.strategy)
 
+        // Fire-and-forget LLM verdict (only if AI enabled in config)
+        if (cfg.ai?.enabled) {
+          generateVerdict(decisionId, pool, best.strategy, bucket, indicators, cfg.ai)
+        }
+
         const elig = allScores.filter(s => s.eligible).map(s => s.strategy).join('/')
-        console.log(`[IC] #${decisionId} ${pool.base?.symbol} → ${best.strategy} (${(best.score * 100).toFixed(0)}pts, ttl=${ttlMinutes}m, eligible: ${elig || 'none'})`)
+        const patStr = pattern?.active ? ` [hist ${(pattern.win_rate*100).toFixed(0)}%/${pattern.sample_count}]` : ''
+        console.log(`[IC] #${decisionId} ${pool.base?.symbol} → ${best.strategy} (conf=${(confidence*100).toFixed(0)}, ttl=${ttlMinutes}m, elig: ${elig || 'none'}${patStr})`)
       } catch (e) {
         console.error(`[IC] Failed to record decision for ${pool.base?.symbol}:`, e.message)
       }

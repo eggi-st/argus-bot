@@ -107,7 +107,19 @@ app.get('/api/dry-run', (req, res) => {
     res.status(500).json({ error: e.message })
   }
 })
-app.get('/api/pattern-library', (req, res) => res.json({ patterns: [], phase: 2 }))
+app.get('/api/pattern-library', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT volatility_bucket, regime, strategy, win_rate, mean_pnl_net,
+             sample_count, active, updated_at
+      FROM pattern_library
+      ORDER BY sample_count DESC, active DESC
+    `).all()
+    res.json({ patterns: rows, total: rows.length })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
 
 app.get('/api/wallet-actions', (req, res) => {
   try {

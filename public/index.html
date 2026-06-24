@@ -49,7 +49,7 @@
 <body>
   <header>
     <div id="status-dot"></div>
-    <h1>🦅 ARGUS <span>v0.3.0 — Phase 0</span></h1>
+    <h1>🦅 ARGUS <span>v0.4.0 — Phase 0</span></h1>
     <div style="margin-left:auto; color: var(--muted); font-size: 12px;" id="ts">—</div>
   </header>
   <main>
@@ -61,7 +61,7 @@
         <span class="phase-item done">✓ Phase 1 — Intelligence Core</span>
         <span class="phase-item done">✓ Phase 2 — Dry Run Engine</span>
         <span class="phase-item done">✓ Phase 3 — Wallet Observer</span>
-        <span class="phase-item next">⏳ Phase 4 — AI + Learning</span>
+        <span class="phase-item done">✓ Phase 4 — AI + Learning</span>
       </div>
     </div>
 
@@ -86,6 +86,14 @@
       <div class="metric"><span class="metric-label">Wallet</span><span class="metric-value" id="wo-addr">—</span></div>
       <div class="metric"><span class="metric-label">Actions (today)</span><span class="metric-value" id="wo-count">—</span></div>
       <div class="metric"><span class="metric-label">Followed Argus</span><span class="metric-value" id="wo-followed">—</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Pattern Library</h2>
+      <div class="metric"><span class="metric-label">Active patterns</span><span class="metric-value" id="pl-active">—</span></div>
+      <div class="metric"><span class="metric-label">Total samples</span><span class="metric-value" id="pl-samples">—</span></div>
+      <div class="metric"><span class="metric-label">Best pattern</span><span class="metric-value" id="pl-best" style="font-size:11px">—</span></div>
+      <div class="metric"><span class="metric-label">Needs data (N&lt;20)</span><span class="metric-value" id="pl-pending">—</span></div>
     </div>
 
     <div class="card">
@@ -199,15 +207,35 @@
           const dexLink = dec.token_mint
             ? `<a href="https://dexscreener.com/solana/${dec.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none;" title="DexScreener">${dec.token_symbol || dec.token_mint.slice(0,8)}</a>`
             : (dec.token_symbol || '?')
+          const verdictHtml = dec.llm_verdict
+            ? `<div id="verdict-${dec.id}" style="font-size:11px;color:var(--muted);padding:3px 0 6px;border-bottom:1px solid var(--border);font-style:italic">${dec.llm_verdict}</div>`
+            : `<div id="verdict-${dec.id}"></div>`
           return `<div style="display:grid;grid-template-columns:100px 100px 120px 1fr 60px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);">` +
             `<span>${dexLink}</span>` +
-            `<span><span class="pill ${color}">${dec.strategy}</span></span>` +
+            `<span><span class="pill ${color}">${dec.strategy}</span> <span style="font-size:10px;color:var(--muted)">${pct}%</span></span>` +
             `<span style="color:var(--muted)">${athStr} · ${volStr}</span>` +
             `<span style="color:var(--muted);font-size:11px">${feeTvlStr} · ${dec.condition_bucket || ''}</span>` +
             `<span style="color:var(--muted);font-size:11px;text-align:right">exp ${exp}</span>` +
-            `</div>`
+            `</div>` + verdictHtml
         }).join('')
         el.innerHTML = `<div style="display:grid;grid-template-columns:100px 100px 120px 1fr 60px;gap:8px;padding:0 0 6px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Token</span><span>Strategy</span><span>Key Signals</span><span>Condition</span><span style="text-align:right">Expires</span></div>${rows}`
+      }).catch(() => {})
+    }
+
+    function loadPatternLibrary() {
+      fetch('/api/pattern-library').then(r => r.json()).then(d => {
+        const patterns = d.patterns || []
+        const active   = patterns.filter(p => p.active)
+        const total    = patterns.reduce((s, p) => s + (p.sample_count || 0), 0)
+        const pending  = patterns.filter(p => !p.active)
+        document.getElementById('pl-active').textContent  = active.length
+        document.getElementById('pl-samples').textContent = total
+        document.getElementById('pl-pending').textContent = pending.length
+
+        const best = active.sort((a, b) => b.win_rate - a.win_rate)[0]
+        document.getElementById('pl-best').textContent = best
+          ? `${best.volatility_bucket}×${best.regime}×${best.strategy} (${(best.win_rate*100).toFixed(0)}%)`
+          : '—'
       }).catch(() => {})
     }
 
@@ -285,6 +313,7 @@
         loadDecisions()
         loadDryRun()
         loadWalletActions()
+        loadPatternLibrary()
       }
       ws.onmessage = ({ data }) => {
         const msg = JSON.parse(data)
@@ -292,6 +321,12 @@
         if (msg.type === 'scan_result' || msg.type === 'recommendation_expired') { loadDecisions(); loadDryRun() }
         if (msg.type === 'dry_run_closed') loadDryRun()
         if (msg.type === 'wallet_action_detected' || msg.type === 'wallet_action') loadWalletActions()
+        if (msg.type === 'verdict_ready') {
+          const el = document.getElementById(`verdict-${msg.decision_id}`)
+          if (el) { el.textContent = msg.verdict; el.style.fontStyle = 'italic'; el.style.color = 'var(--muted)' }
+          else loadDecisions()
+        }
+        if (msg.type === 'outcome_recorded') loadPatternLibrary()
         if (msg.type !== 'pong') {
           const summary = msg.type === 'scan_result'
             ? `scan_result: ${msg.decisions} decisions from ${msg.candidates} candidates (${msg.elapsed_ms}ms)`
