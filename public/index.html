@@ -59,8 +59,8 @@
       <div class="phase-list">
         <span class="phase-item done">✓ Phase 0 — Foundation</span>
         <span class="phase-item done">✓ Phase 1 — Intelligence Core</span>
-        <span class="phase-item next">⏳ Phase 2 — Dry Run Engine</span>
-        <span class="phase-item pending">Phase 3 — Wallet Observer</span>
+        <span class="phase-item done">✓ Phase 2 — Dry Run Engine</span>
+        <span class="phase-item next">⏳ Phase 3 — Wallet Observer</span>
         <span class="phase-item pending">Phase 4 — AI + Learning</span>
       </div>
     </div>
@@ -80,11 +80,24 @@
       <div class="metric"><span class="metric-label">Blacklisted Tokens</span><span class="metric-value" id="bl-count">—</span></div>
     </div>
 
+    <div class="card">
+      <h2>Dry Run Stats</h2>
+      <div class="metric"><span class="metric-label">Open Positions</span><span class="metric-value" id="dr-open">—</span></div>
+      <div class="metric"><span class="metric-label">Closed</span><span class="metric-value" id="dr-closed">—</span></div>
+      <div class="metric"><span class="metric-label">Win Rate</span><span class="metric-value" id="dr-winrate">—</span></div>
+      <div class="metric"><span class="metric-label">Avg P&amp;L</span><span class="metric-value" id="dr-avgpnl">—</span></div>
+    </div>
+
     <div class="card" style="grid-column:1/-1;">
       <h2>Active Decisions
         <button id="scan-btn" onclick="triggerScan()" style="float:right;background:var(--blue);color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:11px;">▶ Scan Now</button>
       </h2>
       <div id="decisions-table" style="font-size:12px;color:var(--muted);line-height:2;">No decisions yet — waiting for first scan…</div>
+    </div>
+
+    <div class="card" style="grid-column:1/-1;">
+      <h2>Dry Run Positions</h2>
+      <div id="dryrun-table" style="font-size:12px;color:var(--muted);">No dry run positions yet.</div>
     </div>
 
     <div class="card" style="grid-column:1/-1;">
@@ -116,6 +129,43 @@
       document.getElementById('daily-loss').textContent =
         `$${(risk.daily_realized_loss_usd || 0).toFixed(2)} / $${risk.limits?.max_daily_loss_usd || 50}`
       document.getElementById('bl-count').textContent = (risk.blacklisted_tokens || []).length
+    }
+
+    function loadDryRun() {
+      fetch('/api/dry-run?limit=15').then(r => r.json()).then(d => {
+        const s = d.stats || {}
+        document.getElementById('dr-open').textContent = s.open_positions ?? '0'
+        document.getElementById('dr-closed').textContent = s.total_closed ?? '0'
+        document.getElementById('dr-winrate').textContent = s.win_rate != null ? s.win_rate + '%' : '—'
+        const avgPnl = s.avg_pnl_pct
+        const avgEl = document.getElementById('dr-avgpnl')
+        avgEl.textContent = avgPnl != null ? (avgPnl >= 0 ? '+' : '') + avgPnl + '%' : '—'
+        avgEl.style.color = avgPnl > 0 ? 'var(--green)' : avgPnl < 0 ? 'var(--red)' : ''
+
+        const el = document.getElementById('dryrun-table')
+        if (!d.positions || !d.positions.length) {
+          el.textContent = 'No dry run positions yet.'
+          return
+        }
+        const rows = d.positions.slice(0, 10).map(p => {
+          const isOpen = p.status === 'open'
+          const pnl = isOpen ? null : p.net_pnl_pct
+          const pnlStr = pnl != null ? `<span style="color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'};">${pnl >= 0 ? '+' : ''}${pnl}%</span>` : '<span style="color:var(--muted)">live…</span>'
+          const holdStr = p.hold_minutes != null ? p.hold_minutes + 'm' : '—'
+          const stratColor = STRATEGY_COLOR[p.strategy] || 'muted'
+          const dexLink = p.token_mint
+            ? `<a href="https://dexscreener.com/solana/${p.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none;">${p.token_symbol || p.token_mint.slice(0,8)}</a>`
+            : (p.token_symbol || '?')
+          return `<div style="display:grid;grid-template-columns:100px 100px 70px 70px 1fr;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)">` +
+            `<span>${dexLink}</span>` +
+            `<span><span class="pill ${stratColor}">${p.strategy}</span></span>` +
+            `<span>${pnlStr}</span>` +
+            `<span style="color:var(--muted)">${holdStr}</span>` +
+            `<span style="color:var(--muted);font-size:11px">${isOpen ? '🟢 open' : p.status}</span>` +
+            `</div>`
+        }).join('')
+        el.innerHTML = `<div style="display:grid;grid-template-columns:100px 100px 70px 70px 1fr;gap:8px;padding:0 0 6px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Token</span><span>Strategy</span><span>Net P&L</span><span>Hold</span><span>Status</span></div>${rows}`
+      }).catch(() => {})
     }
 
     function loadDecisions() {
@@ -172,11 +222,13 @@
           document.getElementById('ts').textContent = new Date(d.ts).toLocaleString('id-ID')
         })
         loadDecisions()
+        loadDryRun()
       }
       ws.onmessage = ({ data }) => {
         const msg = JSON.parse(data)
         if (msg.type === 'init' || msg.type === 'risk_update') updateRisk(msg.risk)
-        if (msg.type === 'scan_result' || msg.type === 'recommendation_expired') loadDecisions()
+        if (msg.type === 'scan_result' || msg.type === 'recommendation_expired') { loadDecisions(); loadDryRun() }
+        if (msg.type === 'dry_run_closed') loadDryRun()
         if (msg.type !== 'pong') {
           const summary = msg.type === 'scan_result'
             ? `scan_result: ${msg.decisions} decisions from ${msg.candidates} candidates (${msg.elapsed_ms}ms)`

@@ -33,6 +33,8 @@ async function init() {
   process.stdout.write('[Init] Layer 2 · Intelligence Core... ')
   const ic = require('../intelligence/index')
   ic.init()
+  const dryRun = require('../dry-run/engine')
+  dryRun.init()
   console.log('✓')
 
   // ── Layer 3: Scheduler ───────────────────────────────────────────────────

@@ -16,6 +16,7 @@ app.use(express.static(path.join(__dirname, '../public')))
 // ── API Routes ────────────────────────────────────────────────────────────────
 
 const { version } = require('../package.json')
+const db = require('./db/database')
 
 app.get('/api/health', (req, res) => {
   res.json({
@@ -49,7 +50,6 @@ app.post('/api/blacklist', (req, res) => {
 // Active decisions — what Argus is currently recommending
 app.get('/api/candidates', (req, res) => {
   try {
-    const db = require('./db/database')
     const limit = Math.min(parseInt(req.query.limit || '20', 10), 100)
     const status = req.query.status || 'active'
     const rows = db.prepare(
@@ -85,7 +85,28 @@ app.post('/api/scan/run', async (req, res) => {
   }
 })
 
-app.get('/api/dry-run', (req, res) => res.json({ positions: [], phase: 2 }))
+app.get('/api/dry-run', (req, res) => {
+  try {
+    const dryRun = require('./dry-run/engine')
+    const limit = Math.min(parseInt(req.query.limit || '30', 10), 200)
+    const status = req.query.status  // optional filter: 'open' | 'closed'
+
+    const where = status ? `WHERE dr.status = '${status.replace(/'/g, "''")}'` : ''
+    const positions = db.prepare(`
+      SELECT dr.id, dr.opened_at, dr.closed_at, dr.token_symbol, dr.token_mint,
+             dr.pool_address, dr.strategy, dr.entry_price_sol, dr.exit_price_sol,
+             dr.sol_amount, dr.gross_pnl_pct, dr.net_pnl_pct, dr.hold_minutes,
+             dr.status, dr.outcome_valid
+      FROM dry_run_positions dr
+      ${where}
+      ORDER BY dr.opened_at DESC LIMIT ?
+    `).all(limit)
+
+    res.json({ positions, stats: dryRun.getStats() })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
 app.get('/api/pattern-library', (req, res) => res.json({ patterns: [], phase: 2 }))
 app.get('/api/wallet-actions', (req, res) => res.json({ actions: [], phase: 3 }))
 

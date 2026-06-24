@@ -55,6 +55,14 @@ const DEFAULTS = {
   scan: {
     topCandidateLimit: 10,
   },
+  dryRun: {
+    // Virtual stake per position (SOL)
+    solAmount: 0.1,
+    // Close conditions
+    stopLossPct: 20,      // close if price drops > 20% from entry
+    takeProfitPct: 50,    // close if price rises > 50% from entry
+    maxHoldMinutes: 240,  // close after 4 hours regardless
+  },
 }
 
 function deepMerge(base, override) {

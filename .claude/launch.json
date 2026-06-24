@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "argus",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["argus.js"],
+      "port": 4000
+    }
+  ]
+}

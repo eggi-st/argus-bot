@@ -129,6 +129,10 @@ async function runScan() {
         const decisionId = result.lastInsertRowid
         decisions.push({ id: decisionId, pool, strategy: best.strategy, score: best.score, ttlMinutes, expiresAt, bucket })
 
+        // Open a dry run position immediately so we start tracking P&L
+        const dryRun = require('../dry-run/engine')
+        dryRun.openForDecision(decisionId, pool, best.strategy)
+
         const elig = allScores.filter(s => s.eligible).map(s => s.strategy).join('/')
         console.log(`[IC] #${decisionId} ${pool.base?.symbol} → ${best.strategy} (${(best.score * 100).toFixed(0)}pts, ttl=${ttlMinutes}m, eligible: ${elig || 'none'})`)
       } catch (e) {
