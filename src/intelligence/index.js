@@ -3,7 +3,7 @@ const bus = require('../core/event-bus')
 const riskState = require('../core/risk-state')
 const { recordDecision } = require('../db/schema')
 const { getTopCandidates } = require('./screener')
-const { chooseStrategy, scoreStrategies } = require('./strategy-router')
+const { scoreStrategies } = require('./strategy-router')
 const { getConfig } = require('../config')
 const { parseBucket }      = require('../learning/pattern-updater')
 const { getPattern, adjustScore } = require('../learning/pattern-reader')
@@ -13,6 +13,38 @@ const db                   = require('../db/database')
 const dryRun               = require('../dry-run/engine')
 
 let _scanning = false
+
+/**
+ * Gate: should this (strategy × pattern) combination be blocked?
+ *
+ * Rules (applied only when pattern is active AND N >= minSamples):
+ *   1. win_rate < minWinRate   — historically bad win rate
+ *   2. mean_pnl_net < minMeanPnl — avg P&L negative even with some wins
+ *   3. confidence < minConfidence — rule-based score also rejected it
+ *
+ * Never blocks when pattern is calibrating (N < 20 or not active) —
+ * we need samples to learn, blocking early starves the library.
+ */
+function checkPatternGate(pattern, confidence, gateCfg = {}) {
+  const minWinRate    = gateCfg.minWinRate    ?? 0.35
+  const minSamples    = gateCfg.minSamples    ?? 30
+  const minMeanPnl    = gateCfg.minMeanPnl    ?? -1.0
+  const minConfidence = gateCfg.minConfidence ?? 0.15
+
+  if (confidence < minConfidence) {
+    return { blocked: true, reason: `confidence ${(confidence * 100).toFixed(0)}% < floor ${minConfidence * 100}%` }
+  }
+  if (!pattern?.active || pattern.sample_count < minSamples) {
+    return { blocked: false }
+  }
+  if (pattern.win_rate < minWinRate) {
+    return { blocked: true, reason: `WR ${(pattern.win_rate * 100).toFixed(0)}% < min ${minWinRate * 100}% (N=${pattern.sample_count})` }
+  }
+  if (pattern.mean_pnl_net != null && pattern.mean_pnl_net < minMeanPnl) {
+    return { blocked: true, reason: `mean P&L ${pattern.mean_pnl_net.toFixed(1)}% < min ${minMeanPnl}% (N=${pattern.sample_count})` }
+  }
+  return { blocked: false }
+}
 
 /**
  * Classify a pool into a condition bucket for Pattern Library lookup.
@@ -92,18 +124,49 @@ async function runScan() {
       }
 
       const allScores = scoreStrategies(pool, cfg)
-      const best = chooseStrategy(pool, cfg)
       const ttlMinutes = calcTtlMinutes(pool)
       const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString()
       const bucket = conditionBucket(pool)
-
-      // Pattern Library: adjust confidence based on historical win rate
       const { volatility_bucket, regime } = parseBucket(bucket)
-      const pattern = getPattern(volatility_bucket, regime, best.strategy)
-      let confidence = adjustScore(best.score, pattern)
-      if (pattern?.active) {
-        console.log(`[IC] Pattern ${volatility_bucket}×${regime}×${best.strategy}: win=${(pattern.win_rate*100).toFixed(0)}% N=${pattern.sample_count} → confidence ${(best.score*100).toFixed(0)}→${(confidence*100).toFixed(0)}`)
+      const gateCfg = cfg.learning?.confidenceGate ?? {}
+      const gateEnabled = gateCfg.enabled !== false
+
+      // Strategy selection: iterate eligible strategies best→worst,
+      // skip any that the Pattern Gate blocks, pick the first that passes.
+      const eligible = allScores
+        .filter(s => s.eligible)
+        .sort((a, b) => b.score - a.score)
+
+      let chosen = null
+      for (const s of eligible) {
+        const pat = getPattern(volatility_bucket, regime, s.strategy)
+        const adj = adjustScore(s.score, pat)
+        if (pat?.active) {
+          console.log(`[IC] Pattern ${volatility_bucket}×${regime}×${s.strategy}: WR=${(pat.win_rate*100).toFixed(0)}% N=${pat.sample_count} → ${(s.score*100).toFixed(0)}→${(adj*100).toFixed(0)}%`)
+        }
+        if (gateEnabled) {
+          const gate = checkPatternGate(pat, adj, gateCfg)
+          if (gate.blocked) {
+            console.log(`[IC] Gate blocked ${pool.base?.symbol} ${s.strategy}: ${gate.reason}`)
+            continue
+          }
+        }
+        chosen = { strategy: s.strategy, score: s.score, confidence: adj, pattern: pat }
+        break
       }
+
+      if (!chosen) {
+        const reasons = eligible.map(s => {
+          const pat = getPattern(volatility_bucket, regime, s.strategy)
+          const adj = adjustScore(s.score, pat)
+          return checkPatternGate(pat, adj, gateCfg).reason || 'no eligible'
+        }).join('; ')
+        console.log(`[IC] ${pool.base?.symbol} ALL strategies gated (${reasons}) — skipping`)
+        continue
+      }
+
+      let confidence = chosen.confidence
+      const pattern = chosen.pattern
 
       // Smart money confirmation: boost confidence if a tracked wallet recently LP'd this pool
       let smartMoneyConfirmed = false
@@ -152,7 +215,7 @@ async function runScan() {
           token_mint: pool.base?.mint,
           token_symbol: pool.base?.symbol,
           pool_address: pool.pool,
-          strategy: best.strategy,
+          strategy: chosen.strategy,
           indicators_json: JSON.stringify(indicators),
           strategy_scores_json: JSON.stringify(allScores),
           llm_verdict: null,
@@ -161,11 +224,11 @@ async function runScan() {
         })
 
         const decisionId = result.lastInsertRowid
-        decisions.push({ id: decisionId, pool, strategy: best.strategy, score: best.score, ttlMinutes, expiresAt, bucket })
+        decisions.push({ id: decisionId, pool, strategy: chosen.strategy, score: chosen.score, ttlMinutes, expiresAt, bucket })
 
         // Open a dry run position immediately so we start tracking P&L
         try {
-          dryRun.openForDecision(decisionId, pool, best.strategy)
+          dryRun.openForDecision(decisionId, pool, chosen.strategy)
         } catch (drErr) {
           console.error(`[IC] Failed to open dry run for decision #${decisionId}:`, drErr.message)
         }
@@ -173,7 +236,7 @@ async function runScan() {
         // Telegram alert — fire-and-forget
         telegram.recommendation({
           token:      pool.base?.symbol || '?',
-          strategy:   best.strategy,
+          strategy:   chosen.strategy,
           confidence: Math.round(confidence * 100),
           ttlMinutes,
           verdict:    null,
@@ -182,7 +245,7 @@ async function runScan() {
 
         // Fire-and-forget LLM verdict (only if AI enabled in config)
         if (cfg.ai?.enabled) {
-          generateVerdict(decisionId, pool, best.strategy, bucket, indicators, cfg.ai)
+          generateVerdict(decisionId, pool, chosen.strategy, bucket, indicators, cfg.ai)
         }
 
         // Meridian integration — push signal via webhook (fire-and-forget)
@@ -193,7 +256,7 @@ async function runScan() {
             token_symbol:         pool.base?.symbol,
             token_mint:           pool.base?.mint,
             pool_address:         pool.pool,
-            strategy:             best.strategy,
+            strategy:             chosen.strategy,
             confidence:           confidence,
             expires_at:           expiresAt,
             condition_bucket:     bucket,
@@ -204,7 +267,7 @@ async function runScan() {
 
         const elig = allScores.filter(s => s.eligible).map(s => s.strategy).join('/')
         const patStr = pattern?.active ? ` [hist ${(pattern.win_rate*100).toFixed(0)}%/${pattern.sample_count}]` : ''
-        console.log(`[IC] #${decisionId} ${pool.base?.symbol} → ${best.strategy} (conf=${(confidence*100).toFixed(0)}, ttl=${ttlMinutes}m, elig: ${elig || 'none'}${patStr})`)
+        console.log(`[IC] #${decisionId} ${pool.base?.symbol} → ${chosen.strategy} (conf=${(confidence*100).toFixed(0)}, ttl=${ttlMinutes}m, elig: ${elig || 'none'}${patStr})`)
       } catch (e) {
         console.error(`[IC] Failed to record decision for ${pool.base?.symbol}:`, e.message)
       }
