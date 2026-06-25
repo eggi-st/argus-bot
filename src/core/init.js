@@ -59,6 +59,9 @@ async function init() {
   const telegram = require('../notifications/telegram')
   await telegram.init()
 
+  const alertWiring = require('../notifications/alert-wiring')
+  alertWiring.init()
+
   process.stdout.write('[Init] Layer 5 · Web server... ')
   const server = require('../server')
   await server.start()

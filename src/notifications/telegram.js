@@ -114,11 +114,13 @@ class TelegramNotifier {
 
   recommendation({ token, strategy, confidence, ttlMinutes, verdict, poolUrl }) {
     const stratLabel = { limit_order: 'Limit Order', spot: 'Spot LP', bid_ask: 'Bid Ask' }[strategy] || strategy
+    const serverUrl  = process.env.ARGUS_SERVER_URL || `http://localhost:${process.env.PORT || 4000}`
+    const verdictLine = verdict ? `\n"${verdict}"` : ''
     return this.send(
-      `<b>${token}</b> · ${stratLabel} · ${confidence}% · valid ${ttlMinutes}m\n` +
-      `"${verdict}"\n` +
+      `🎯 <b>${token}</b> · ${stratLabel} · ${confidence}% conf · valid ${ttlMinutes}m` +
+      verdictLine + '\n' +
       (poolUrl ? `<a href="${poolUrl}">Buka pool</a> · ` : '') +
-      `<a href="http://localhost:${process.env.PORT || 4000}">Dashboard Argus</a>`,
+      `<a href="${serverUrl}">Dashboard</a>`,
       'P2'
     )
   }

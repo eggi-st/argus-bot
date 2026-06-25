@@ -8,6 +8,7 @@ const { getConfig } = require('../config')
 const { parseBucket }      = require('../learning/pattern-updater')
 const { getPattern, adjustScore } = require('../learning/pattern-reader')
 const { generateVerdict }  = require('../ai/verdict-generator')
+const telegram             = require('../notifications/telegram')
 
 let _scanning = false
 
@@ -143,6 +144,16 @@ async function runScan() {
         // Open a dry run position immediately so we start tracking P&L
         const dryRun = require('../dry-run/engine')
         dryRun.openForDecision(decisionId, pool, best.strategy)
+
+        // Telegram alert — fire-and-forget
+        telegram.recommendation({
+          token:      pool.base?.symbol || '?',
+          strategy:   best.strategy,
+          confidence: Math.round(confidence * 100),
+          ttlMinutes,
+          verdict:    null,
+          poolUrl:    pool.pool ? `https://app.meteora.ag/dlmm/${pool.pool}` : null,
+        })
 
         // Fire-and-forget LLM verdict (only if AI enabled in config)
         if (cfg.ai?.enabled) {
