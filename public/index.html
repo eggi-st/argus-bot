@@ -246,6 +246,10 @@
       <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
       <span class="tip">Log</span>
     </button>
+    <button class="nav-btn" data-page="brain" onclick="switchPage('brain')">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M12 3a3 3 0 00-3 3 3 3 0 00-3 3 3 3 0 000 6 3 3 0 003 3 3 3 0 006 0 3 3 0 003-3 3 3 0 000-6 3 3 0 00-3-3 3 3 0 00-3-3zm0 0v18"/></svg>
+      <span class="tip">Brain</span>
+    </button>
   </nav>
 </aside>
 
@@ -470,6 +474,30 @@
     </div>
   </div>
 
+  <!-- ── Brain (self-diagnosis + tuning) ───────────────────────────────────── -->
+  <div class="page" id="page-brain">
+    <div class="card">
+      <div class="card-title">System Report
+        <button class="btn btn-gray" onclick="loadSelfReport(true)" style="font-size:10px;padding:3px 9px">↻ Regenerate</button>
+      </div>
+      <pre id="self-report-text" class="empty" style="white-space:pre-wrap;font-size:12px;line-height:1.5;font-family:inherit">Belum ada report — dibuat tiap hari 09:00.</pre>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Capability Gaps <span id="cg-count"></span>
+        <button class="btn btn-gray" onclick="loadCapabilityGaps()" style="font-size:10px;padding:3px 9px">↻</button>
+      </div>
+      <div id="cg-list" class="empty">Belum ada gap terdeteksi — diagnosis tiap 6 jam.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Tuning Events <span id="te-count"></span>
+        <button class="btn btn-gray" onclick="loadTuningEvents()" style="font-size:10px;padding:3px 9px">↻</button>
+      </div>
+      <div id="te-list" class="empty">Auto-tuner OFF — belum ada usul.</div>
+    </div>
+  </div>
+
 </div><!-- /main -->
 
 <script>
@@ -524,6 +552,7 @@ const PAGE_LOADERS = {
   hivemind: () => loadHivemind(),
   wallet:   () => loadWalletActions(),
   log:      () => { loadRejections(); loadFeedbackHistory() },
+  brain:    () => { loadSelfReport(); loadCapabilityGaps(); loadTuningEvents() },
 }
 function switchPage(id) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'))
@@ -967,6 +996,61 @@ function loadRejections() {
     }).join('')
     el.innerHTML = `<div class="tbl-wrap">${header + rows}</div>`
   }).catch(() => {})
+}
+
+// ── Brain: self-diagnosis + tuning ───────────────────────────────────────────────
+function sevBadge(s) {
+  const c = { high:'#ef4444', medium:'#eab308', low:'#6b7280' }[s] || '#6b7280'
+  return `<span class="badge" style="background:${c}22;color:${c};border:1px solid ${c}55">${s||'—'}</span>`
+}
+function loadCapabilityGaps() {
+  apiFetch('/api/capability-gaps').then(r => r.json()).then(d => {
+    const el = document.getElementById('cg-list'), cnt = document.getElementById('cg-count')
+    const gaps = d.gaps || []
+    if (cnt) cnt.textContent = gaps.length ? `(${gaps.length})` : ''
+    if (!gaps.length) { el.className = 'empty'; el.innerHTML = 'Belum ada gap terdeteksi — diagnosis tiap 6 jam.'; return }
+    el.className = ''
+    el.innerHTML = gaps.map(g => `
+      <div class="dec-row" style="flex-direction:column;align-items:stretch">
+        <div class="dec-top">${sevBadge(g.severity)}<span class="dec-pair" style="max-width:none">${g.strategy||'—'} · ${g.reason_key}</span><span class="dec-time">${g.saturation_pct}%</span></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px">${g.suggested_action||''}</div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:2px">${g.kind} · N=${g.denominator} · ${g.sustained_scans} scans</div>
+      </div>`).join('')
+  }).catch(() => {})
+}
+function loadTuningEvents() {
+  apiFetch('/api/tuning-events?limit=30').then(r => r.json()).then(d => {
+    const el = document.getElementById('te-list'), cnt = document.getElementById('te-count')
+    const evs = d.events || []
+    if (cnt) cnt.textContent = evs.length ? `(${evs.length})` : ''
+    if (!evs.length) { el.className = 'empty'; el.innerHTML = 'Auto-tuner OFF — belum ada usul.'; return }
+    el.className = ''
+    el.innerHTML = evs.map(e => {
+      const sc = { applied:'#22c55e', proposed:'#eab308', rejected:'#6b7280', reverted:'#6b7280' }[e.status] || 'var(--muted)'
+      const ts = new Date(e.created_at).toLocaleString('id-ID', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})
+      const act = e.status === 'proposed'
+        ? `<div style="margin-top:5px;display:flex;gap:6px"><button class="btn btn-gray" style="font-size:10px;padding:3px 10px" onclick="tuningAction(${e.id},'approve')">✓ Approve</button><button class="btn btn-gray" style="font-size:10px;padding:3px 10px" onclick="tuningAction(${e.id},'reject')">✕ Reject</button></div>` : ''
+      return `<div class="dec-row" style="flex-direction:column;align-items:stretch">
+        <div class="dec-top"><span class="badge badge-gray">${e.mode}</span><span class="dec-pair" style="max-width:none">${e.param_path}</span><span style="font-size:11px">${e.old_value} → ${e.new_value}</span><span class="dec-time" style="color:${sc}">${e.status}</span></div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:2px">${ts} · N=${e.sample_count??'?'} · WR ${e.win_rate!=null?Math.round(e.win_rate*100)+'%':'?'} · LB ${e.wilson_lb!=null?Math.round(e.wilson_lb*100)+'%':'?'}</div>
+        ${e.reason ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">${e.reason}</div>` : ''}
+        ${act}
+      </div>`
+    }).join('')
+  }).catch(() => {})
+}
+function tuningAction(id, action) {
+  apiFetch(`/api/tuning-events/${id}/${action}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })
+    .then(() => loadTuningEvents()).catch(() => {})
+}
+function loadSelfReport(fresh) {
+  const el = document.getElementById('self-report-text')
+  if (fresh) { el.className = ''; el.textContent = 'Generating…' }
+  apiFetch('/api/self-report' + (fresh ? '?fresh=1' : '')).then(r => r.json()).then(d => {
+    const text = fresh ? d.text : (d.report && d.report.report_text)
+    if (!text) { el.className = 'empty'; el.textContent = 'Belum ada report — dibuat tiap hari 09:00.'; return }
+    el.className = ''; el.textContent = text
+  }).catch(() => { el.textContent = 'Gagal memuat report.' })
 }
 
 // ── Scan ───────────────────────────────────────────────────────────────────────

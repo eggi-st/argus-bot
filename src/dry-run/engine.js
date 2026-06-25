@@ -1,7 +1,7 @@
 'use strict'
 const bus = require('../core/event-bus')
 const db = require('../db/database')
-const { recordDryRunPosition, closeDryRunPosition } = require('../db/schema')
+const { recordDryRunPosition, closeDryRunPosition, recordTokenPrice } = require('../db/schema')
 const { getPoolSnapshot, getDexscreenerPrice } = require('./price-feed')
 
 // Range bins by strategy — how many bins wide a typical position is
@@ -155,6 +155,7 @@ async function updateOpenPositions() {
         currentPrice = d?.price_sol ?? null
       }
       if (currentPrice == null) continue
+      try { recordTokenPrice(pos.token_mint, currentPrice, new Date().toISOString()) } catch {}
 
       // Bootstrap: fill entry price if it was null at open time
       if (!pos.entry_price_sol) {

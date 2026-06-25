@@ -47,6 +47,16 @@ const DEFAULTS = {
         minTokenAgeHours: 24,    // older than the fresh-meme bid_ask universe
         maxTokenAgeHours: null,  // no upper age bound — let established calm pools through
       },
+      limit_order: {
+        // Established tokens that have had time to peak and pull back. Needs price_vs_ath_pct
+        // (OKX maxPrice in prod, or Argus's internal ATH water mark as fallback) to qualify —
+        // until that fills, this pipeline is a safe no-op surfaced by self-diagnosis.
+        // maxVolatility derives from limitOrder.maxVolatility via resolveScreening (single source).
+        minTokenAgeHours: 168,   // ≥7 days
+        maxTokenAgeHours: null,
+        minHolders: 500,
+        minTvl: 10_000,
+      },
     },
   },
   strategy: {
@@ -72,8 +82,9 @@ const DEFAULTS = {
     // limit_order is intentionally omitted: price_vs_ath_pct is null for fresh tokens (OKX has
     // no maxPrice), so it would find zero candidates until an ATH-data source is wired.
     pipelines: [
-      { profile: 'bid_ask', strategy: 'bid_ask' },
-      { profile: 'spot',    strategy: 'spot' },
+      { profile: 'bid_ask',     strategy: 'bid_ask' },
+      { profile: 'spot',        strategy: 'spot' },
+      { profile: 'limit_order', strategy: 'limit_order' },
     ],
   },
   learning: {

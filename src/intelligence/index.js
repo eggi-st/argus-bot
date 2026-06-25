@@ -106,10 +106,12 @@ function resolveScreening(cfg, profileKey) {
   delete base.profiles
   const override = cfg.screening?.profiles?.[profileKey]
   const merged = override ? { ...base, ...override } : base
-  // Single source of truth: the spot vol cap derives from strategy.spotMaxVolatility, so the
-  // screener and the router (strategy-router.js:45) can never drift apart.
+  // Single source of truth for each strategy's vol cap, so the screener and the router can
+  // never drift apart (spot ← strategy.spotMaxVolatility, limit_order ← limitOrder.maxVolatility).
   if (profileKey === 'spot' && cfg.strategy?.spotMaxVolatility != null) {
     merged.maxVolatility = cfg.strategy.spotMaxVolatility
+  } else if (profileKey === 'limit_order' && cfg.limitOrder?.maxVolatility != null) {
+    merged.maxVolatility = cfg.limitOrder.maxVolatility
   }
   return merged
 }

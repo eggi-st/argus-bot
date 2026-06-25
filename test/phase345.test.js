@@ -46,8 +46,10 @@ console.log('Phase 4A — writeUserConfig round-trip (backs up + restores real f
       assert.strictEqual(getConfig().scan.topCandidateLimit, before + 3)
     })
     ok('array path is refused (deepMerge would clobber)', () => {
+      const { DEFAULTS } = require('../src/config')
+      const defLen = DEFAULTS.scan.pipelines.length
       writeUserConfig({ scan: { pipelines: [{ profile: 'x', strategy: 'x' }] } })
-      assert.strictEqual(getConfig().scan.pipelines.length, 2)
+      assert.strictEqual(getConfig().scan.pipelines.length, defLen)  // array patch ignored
     })
   } finally {
     if (backup != null) fs.writeFileSync(USER, backup, 'utf8')

@@ -198,6 +198,24 @@ function migrateSchema() {
     if (!e.message?.includes('already exists')) console.warn('[Schema] screening_rejections:', e.message)
   }
 
+  // token_ath table — internal all-time-high water mark (fallback ATH when OKX has no maxPrice).
+  // Builds from prices Argus already polls; only an ATH-since-we-started-watching, documented.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS token_ath (
+        token_mint     TEXT PRIMARY KEY,
+        ath_price_sol  REAL,
+        ath_seen_at    TEXT,
+        last_price_sol REAL,
+        observations   INTEGER DEFAULT 0,
+        first_seen_at  TEXT,
+        updated_at     TEXT
+      );
+    `)
+  } catch (e) {
+    if (!e.message?.includes('already exists')) console.warn('[Schema] token_ath:', e.message)
+  }
+
   // capability_gaps table — self-diagnosis: sustained eligibility/screening blind spots
   try {
     db.exec(`
@@ -448,6 +466,26 @@ function getTuningEvents(limit = 20) {
   return db.prepare(`SELECT * FROM tuning_events ORDER BY created_at DESC LIMIT ?`).all(limit)
 }
 
+/** Record a price observation, maintaining the per-token all-time-high water mark. */
+function recordTokenPrice(mint, price, ts) {
+  if (!mint || !(price > 0)) return
+  return getStmt('recordTokenPrice', `
+    INSERT INTO token_ath (token_mint, ath_price_sol, ath_seen_at, last_price_sol, observations, first_seen_at, updated_at)
+    VALUES (@mint, @price, @ts, @price, 1, @ts, @ts)
+    ON CONFLICT(token_mint) DO UPDATE SET
+      ath_price_sol  = CASE WHEN @price > ath_price_sol THEN @price ELSE ath_price_sol END,
+      ath_seen_at    = CASE WHEN @price > ath_price_sol THEN @ts   ELSE ath_seen_at   END,
+      last_price_sol = @price,
+      observations   = observations + 1,
+      updated_at     = @ts
+  `).run({ mint, price, ts })
+}
+
+function getTokenAth(mint) {
+  if (!mint) return null
+  return db.prepare(`SELECT * FROM token_ath WHERE token_mint = ?`).get(mint)
+}
+
 module.exports = {
   initSchema, db,
   recordDecision, expireDecision, markFollowed,
@@ -455,4 +493,5 @@ module.exports = {
   recordWalletAction, recordRejection, recordPatternReconciled,
   openOrUpdateGap, resolveStaleGaps, listOpenGaps,
   recordSystemReport, recordTuningEvent, getTuningEvents,
+  recordTokenPrice, getTokenAth,
 }

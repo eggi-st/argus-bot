@@ -2,7 +2,7 @@
 const fetch = require('node-fetch')
 const db = require('../db/database')
 const { getConfig } = require('../config')
-const { recordRejection } = require('../db/schema')
+const { recordRejection, recordTokenPrice, getTokenAth } = require('../db/schema')
 
 const POOL_DISCOVERY_BASE = 'https://pool-discovery-api.datapi.meteora.ag'
 const OKX_BASE = 'https://web3.okx.com'
@@ -464,6 +464,21 @@ async function getTopCandidates({ limit = 10, screening } = {}) {
     }
     return true
   })
+
+  // Internal ATH water mark: record each candidate's price and, when OKX returned no maxPrice,
+  // derive price_vs_ath_pct from the highest price Argus has observed (>=3 obs to avoid noise).
+  // This is an ATH-since-we-started-watching — weaker than a true ATH, used only as a fallback.
+  for (const p of clean) {
+    if (!p.base?.mint || !(p.price > 0)) continue
+    try { recordTokenPrice(p.base.mint, p.price, now) } catch {}
+    if (p.price_vs_ath_pct == null) {
+      const a = getTokenAth(p.base.mint)
+      if (a && a.observations >= 3 && a.ath_price_sol > 0) {
+        p.price_vs_ath_pct = fix((p.price / a.ath_price_sol) * 100, 1)
+        p.ath = a.ath_price_sol
+      }
+    }
+  }
 
   const candidates = clean.slice(0, limit)
 
