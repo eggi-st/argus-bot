@@ -64,33 +64,40 @@ function matchToDecision(action) {
 }
 
 /**
- * Match + record a parsed action. Marks the matched decision as 'followed'.
+ * Match + record a parsed action.
+ * For own wallet: marks the matched decision as 'followed'.
+ * For smart_money wallets: records as learning signal only (no markFollowed).
  * Returns the record that was (attempted to be) inserted.
  */
-function processAction(action, { recordWalletAction, markFollowed }) {
+function processAction(action, wallet, { recordWalletAction, markFollowed }) {
   const match = matchToDecision(action)
 
   const record = {
-    detected_at:        action.blockTime || new Date().toISOString(),
-    signature:          action.signature,
-    action_type:        action.actionType,
-    pool_address:       match.poolAddress,
-    token_mint:         match.tokenMint,
-    token_symbol:       match.tokenSymbol,
-    strategy:           match.strategy,
-    amount_sol:         null,
+    detected_at:         action.blockTime || new Date().toISOString(),
+    signature:           action.signature,
+    action_type:         action.actionType,
+    pool_address:        match.poolAddress,
+    token_mint:          match.tokenMint,
+    token_symbol:        match.tokenSymbol,
+    strategy:            match.strategy,
+    amount_sol:          null,
     matched_decision_id: match.matchedDecisionId,
-    match_category:     match.matchCategory,
+    match_category:      match.matchCategory,
+    wallet_address:      wallet.address,
+    wallet_label:        wallet.label,
+    wallet_type:         wallet.type,
   }
 
   recordWalletAction(record)
 
   if (match.matchedDecisionId) {
-    markFollowed(match.matchedDecisionId)
-    console.log(`[Wallet] ✓ Followed decision #${match.matchedDecisionId} — ${action.actionType} on ${match.tokenSymbol || match.poolAddress?.slice(0, 8)}`)
+    if (wallet.type === 'own') markFollowed(match.matchedDecisionId)
+    const icon = wallet.type === 'smart_money' ? '🐋' : '✓'
+    const sym  = match.tokenSymbol || match.poolAddress?.slice(0, 8)
+    console.log(`[Wallet] ${icon} ${wallet.label}: ${action.actionType} matched decision #${match.matchedDecisionId} (${sym})`)
   } else {
     const pool = match.poolAddress?.slice(0, 8) || '?'
-    console.log(`[Wallet] user_only — ${action.actionType} on pool ${pool}… (counterfactual)`)
+    console.log(`[Wallet] ${wallet.label}: ${action.actionType} on pool ${pool}… (user_only)`)
   }
 
   return record

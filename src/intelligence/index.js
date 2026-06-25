@@ -99,10 +99,29 @@ async function runScan() {
       // Pattern Library: adjust confidence based on historical win rate
       const { volatility_bucket, regime } = parseBucket(bucket)
       const pattern = getPattern(volatility_bucket, regime, best.strategy)
-      const confidence = adjustScore(best.score, pattern)
+      let confidence = adjustScore(best.score, pattern)
       if (pattern?.active) {
         console.log(`[IC] Pattern ${volatility_bucket}×${regime}×${best.strategy}: win=${(pattern.win_rate*100).toFixed(0)}% N=${pattern.sample_count} → confidence ${(best.score*100).toFixed(0)}→${(confidence*100).toFixed(0)}`)
       }
+
+      // Smart money confirmation: boost confidence if a tracked wallet recently LP'd this pool
+      let smartMoneyConfirmed = false
+      try {
+        const db = require('../db/database')
+        const smRow = db.prepare(`
+          SELECT COUNT(DISTINCT wallet_address) as cnt
+          FROM wallet_actions
+          WHERE pool_address = ?
+            AND wallet_type = 'smart_money'
+            AND detected_at > datetime('now', '-24 hours')
+            AND action_type IN ('add_liquidity', 'open_position')
+        `).get(pool.pool)
+        if ((smRow?.cnt || 0) > 0) {
+          smartMoneyConfirmed = true
+          confidence = Math.min(1, confidence * 1.15)
+          console.log(`[IC] 🐋 Smart money signal: ${smRow.cnt} wallet(s) in ${pool.base?.symbol} → conf boosted to ${(confidence*100).toFixed(0)}`)
+        }
+      } catch {}
 
       const indicators = {
         volatility: pool.volatility,
@@ -113,6 +132,7 @@ async function runScan() {
         holders: pool.holders,
         price_vs_ath_pct: pool.price_vs_ath_pct,
         smart_money_buy: pool.smart_money_buy ?? null,
+        smart_money_confirmed: smartMoneyConfirmed,
         dev_sold_all: pool.dev_sold_all ?? null,
         risk_level: pool.risk_level ?? null,
         top10_pct: pool.top10_pct ?? null,

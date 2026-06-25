@@ -129,7 +129,8 @@ app.get('/api/wallet-actions', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit || '30', 10), 200)
     const actions = db.prepare(`
       SELECT id, detected_at, action_type, pool_address, token_mint, token_symbol,
-             strategy, amount_sol, matched_decision_id, match_category
+             strategy, amount_sol, matched_decision_id, match_category,
+             wallet_address, wallet_label, wallet_type
       FROM wallet_actions
       ORDER BY detected_at DESC LIMIT ?
     `).all(limit)

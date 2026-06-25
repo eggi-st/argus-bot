@@ -69,6 +69,10 @@ const DEFAULTS = {
     address: null,
     rpcUrl: 'https://api.mainnet-beta.solana.com',
     pollIntervalMs: 30_000,
+    // Smart money wallets to track. Each entry: { address, label }
+    // These wallets are observed as learning signals — their LP activity boosts
+    // confidence when they enter the same pool Argus recommends.
+    trackedWallets: [],
   },
   ai: {
     // LLM verdict generation via OpenAI-compatible endpoint.

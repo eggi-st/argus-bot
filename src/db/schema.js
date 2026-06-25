@@ -114,7 +114,27 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_pattern_active    ON pattern_library(active);
   `)
 
+  migrateSchema()
   console.log('[Schema] ✓ Database schema ready')
+}
+
+// ALTER TABLE migrations — safe to re-run (duplicate column errors are silently ignored)
+function migrateSchema() {
+  const cols = [
+    `ALTER TABLE wallet_actions ADD COLUMN wallet_address TEXT`,
+    `ALTER TABLE wallet_actions ADD COLUMN wallet_label TEXT`,
+    `ALTER TABLE wallet_actions ADD COLUMN wallet_type TEXT DEFAULT 'own'`,
+  ]
+  let added = 0
+  for (const sql of cols) {
+    try { db.exec(sql); added++ } catch (e) {
+      if (!e.message?.includes('duplicate column')) console.warn('[Schema] Migration:', e.message)
+    }
+  }
+  try {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_wallet_type ON wallet_actions(wallet_type, detected_at)`)
+  } catch {}
+  if (added) console.log(`[Schema] Added ${added} column(s) to wallet_actions`)
 }
 
 // ── Command Queue helpers ─────────────────────────────────────────────────────
@@ -169,13 +189,15 @@ function closeDryRunPosition(id, data) {
 }
 
 function recordWalletAction(data) {
-  return getStmt('insertWalletAction', `
+  return getStmt('insertWalletAction2', `
     INSERT OR IGNORE INTO wallet_actions
       (detected_at, signature, action_type, pool_address, token_mint, token_symbol,
-       strategy, amount_sol, matched_decision_id, match_category)
+       strategy, amount_sol, matched_decision_id, match_category,
+       wallet_address, wallet_label, wallet_type)
     VALUES
       (@detected_at, @signature, @action_type, @pool_address, @token_mint, @token_symbol,
-       @strategy, @amount_sol, @matched_decision_id, @match_category)
+       @strategy, @amount_sol, @matched_decision_id, @match_category,
+       @wallet_address, @wallet_label, @wallet_type)
   `).run(data)
 }
 

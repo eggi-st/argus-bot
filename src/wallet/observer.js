@@ -5,22 +5,23 @@ const { parseMeteoraTx } = require('./tx-parser')
 const { processAction } = require('./matcher')
 const { recordWalletAction, markFollowed } = require('../db/schema')
 
-let _timer      = null
-let _lastSig    = null   // newest signature already seen (cursor)
-let _walletAddr = null
+let _timer   = null
+let _cursors = new Map()   // address → lastSig
+let _wallets = []          // [{address, label, type}]
 
 /**
- * One poll cycle: fetch new signatures → parse → match → emit.
+ * Poll a single wallet for new Meteora transactions.
  */
-async function pollOnce(walletAddress, rpcUrl) {
+async function pollWallet(wallet, rpcUrl) {
+  const lastSig = _cursors.get(wallet.address) || null
   let sigs
   try {
-    sigs = await getSignaturesForAddress(rpcUrl, walletAddress, {
+    sigs = await getSignaturesForAddress(rpcUrl, wallet.address, {
       limit: 20,
-      until: _lastSig || undefined,
+      until: lastSig || undefined,
     })
   } catch (e) {
-    console.warn(`[Wallet] getSignaturesForAddress error: ${e.message}`)
+    console.warn(`[Wallet] ${wallet.label}: getSignaturesForAddress error: ${e.message}`)
     return
   }
 
@@ -29,19 +30,16 @@ async function pollOnce(walletAddress, rpcUrl) {
   const newest = sigs[0].signature
 
   // First run: initialize cursor, don't process historical transactions
-  if (!_lastSig) {
-    _lastSig = newest
-    console.log(`[Wallet] Cursor initialized at ${newest.slice(0, 8)}…`)
+  if (!lastSig) {
+    _cursors.set(wallet.address, newest)
+    console.log(`[Wallet] ${wallet.label} (${wallet.type}): cursor initialized at ${newest.slice(0, 8)}…`)
     return
   }
 
-  _lastSig = newest
+  _cursors.set(wallet.address, newest)
 
-  // Skip failed transactions
   const fresh = sigs.filter(s => !s.err)
   if (!fresh.length) return
-
-  console.log(`[Wallet] ${fresh.length} new tx(s) to check`)
 
   let found = 0
   for (const sig of fresh) {
@@ -50,7 +48,7 @@ async function pollOnce(walletAddress, rpcUrl) {
       const action = parseMeteoraTx(txResult, sig.signature)
       if (!action) continue
 
-      const record = processAction(action, { recordWalletAction, markFollowed })
+      const record = processAction(action, wallet, { recordWalletAction, markFollowed })
       found++
 
       bus.emitSafe('wallet_action_detected', {
@@ -58,6 +56,8 @@ async function pollOnce(walletAddress, rpcUrl) {
         token_symbol:   record.token_symbol,
         match_category: record.match_category,
         pool_address:   record.pool_address,
+        wallet_type:    wallet.type,
+        wallet_label:   wallet.label,
       })
 
       bus.emitSafe('ui_update', {
@@ -66,29 +66,42 @@ async function pollOnce(walletAddress, rpcUrl) {
         token_symbol:   record.token_symbol,
         match_category: record.match_category,
         pool_address:   record.pool_address,
+        wallet_type:    wallet.type,
+        wallet_label:   wallet.label,
       })
     } catch (e) {
-      console.warn(`[Wallet] tx parse error ${sig.signature.slice(0, 8)}: ${e.message}`)
+      console.warn(`[Wallet] ${wallet.label}: parse error ${sig.signature.slice(0, 8)}: ${e.message}`)
     }
   }
 
-  if (found) console.log(`[Wallet] ${found} Meteora action(s) recorded`)
+  if (found) console.log(`[Wallet] ${wallet.label}: ${found} Meteora action(s) recorded`)
 }
 
-function start(walletAddress, rpcUrl, intervalMs) {
-  if (_timer) return
-  _walletAddr = walletAddress
-  console.log(`[Wallet] Watching ${walletAddress.slice(0, 8)}… every ${intervalMs / 1000}s via ${rpcUrl}`)
+/**
+ * Poll all wallets sequentially (avoids rate-limiting on shared RPC).
+ */
+async function pollAll(wallets, rpcUrl) {
+  for (const wallet of wallets) {
+    await pollWallet(wallet, rpcUrl)
+  }
+}
 
-  // Delay first poll so the rest of init finishes
+function start(wallets, rpcUrl, intervalMs) {
+  if (_timer) return
+  _wallets = wallets
+
+  const own = wallets.filter(w => w.type === 'own').length
+  const sm  = wallets.filter(w => w.type === 'smart_money').length
+  console.log(`[Wallet] Watching ${wallets.length} wallet(s) every ${intervalMs / 1000}s (${own} own · ${sm} smart money)`)
+  for (const w of wallets) {
+    const icon = w.type === 'smart_money' ? '🐋' : '👤'
+    console.log(`[Wallet]   ${icon} ${w.label}: ${w.address.slice(0, 8)}…`)
+  }
+
   setTimeout(() => {
-    pollOnce(walletAddress, rpcUrl).catch(e =>
-      console.error('[Wallet] Initial poll failed:', e.message)
-    )
+    pollAll(wallets, rpcUrl).catch(e => console.error('[Wallet] Initial poll failed:', e.message))
     _timer = setInterval(() => {
-      pollOnce(walletAddress, rpcUrl).catch(e =>
-        console.error('[Wallet] Poll cycle failed:', e.message)
-      )
+      pollAll(wallets, rpcUrl).catch(e => console.error('[Wallet] Poll cycle failed:', e.message))
     }, intervalMs)
   }, 5000)
 }
@@ -99,10 +112,14 @@ function stop() {
 
 function getStatus() {
   return {
-    active:        !!_timer,
-    walletAddress: _walletAddr,
-    lastSignature: _lastSig,
+    active:  !!_timer,
+    wallets: _wallets.map(w => ({
+      address:       w.address,
+      label:         w.label,
+      type:          w.type,
+      lastSignature: _cursors.get(w.address) || null,
+    })),
   }
 }
 
-module.exports = { start, stop, getStatus, pollOnce }
+module.exports = { start, stop, getStatus, pollWallet }

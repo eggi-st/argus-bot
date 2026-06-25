@@ -22,6 +22,19 @@ function init() {
     })
   })
 
+  // Smart money wallet aligned with Argus recommendation → P3 signal
+  bus.onSlow('wallet_action_detected', payload => {
+    if (payload?.wallet_type !== 'smart_money') return
+    if (payload?.match_category !== 'followed') return
+    const label  = payload.wallet_label || 'Smart Money'
+    const token  = payload.token_symbol || '?'
+    const action = (payload.action_type || '').replace(/_/g, ' ')
+    telegram.send(
+      `🐋 <b>${label}</b>: ${action} ${token} — konfirmasi dengan rekomendasi Argus`,
+      'P3'
+    )
+  })
+
   console.log('[Alerts] Telegram wiring ready')
 }
 
