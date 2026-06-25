@@ -1,8 +1,13 @@
 'use strict'
 const bus = require('../core/event-bus')
 const db  = require('../db/database')
+const { getConfig } = require('../config')
 
-const PROMOTION_THRESHOLD = 20  // samples required to activate a pattern
+// Read promotion threshold + EMA alpha once at module load (the UPSERT is a fast cache;
+// the reconciliation job — reconcile.js — is the authoritative, config-fresh recomputation).
+const _L = getConfig().learning || {}
+const PROMOTION_THRESHOLD = _L.promotionThreshold ?? 60  // samples required to activate a pattern
+const EMA_ALPHA = _L.emaAlpha ?? 0.15
 
 /**
  * Parse conditionBucket string (e.g. "low_vol_medium_yield_neutral")
@@ -20,13 +25,15 @@ function parseBucket(conditionBucket) {
 
 const UPSERT = `
   INSERT INTO pattern_library
-    (updated_at, volatility_bucket, regime, strategy, win_rate, mean_pnl_net, sample_count, active)
-  VALUES (?, ?, ?, ?, ?, ?, 1, 0)
+    (updated_at, volatility_bucket, regime, strategy, win_rate, mean_pnl_net, sample_count, active, wins, ema_win_rate)
+  VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
   ON CONFLICT(volatility_bucket, regime, strategy) DO UPDATE SET
     updated_at   = excluded.updated_at,
     win_rate     = ((win_rate * sample_count) + excluded.win_rate)     / (sample_count + 1),
     mean_pnl_net = ((mean_pnl_net * sample_count) + excluded.mean_pnl_net) / (sample_count + 1),
     sample_count = sample_count + 1,
+    wins         = COALESCE(wins, 0) + excluded.wins,
+    ema_win_rate = ${EMA_ALPHA} * excluded.win_rate + (1 - ${EMA_ALPHA}) * COALESCE(ema_win_rate, excluded.win_rate),
     active       = CASE WHEN sample_count + 1 >= ${PROMOTION_THRESHOLD} THEN 1 ELSE active END
 `
 
@@ -55,7 +62,7 @@ function updatePattern(positionId, { netPnlPct, strategy, win, source, condition
   const winVal = win ? 1.0 : 0.0
   const now    = new Date().toISOString()
 
-  db.prepare(UPSERT).run(now, volatility_bucket, regime, strategy, winVal, netPnlPct)
+  db.prepare(UPSERT).run(now, volatility_bucket, regime, strategy, winVal, netPnlPct, winVal, winVal)
 
   if (!Number.isFinite(netPnlPct)) {
     console.warn('[Pattern] Invalid netPnlPct — skipping pattern update')

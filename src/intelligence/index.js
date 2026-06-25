@@ -15,30 +15,49 @@ const dryRun               = require('../dry-run/engine')
 let _scanning = false
 
 /**
+ * Wilson score lower bound for a binomial proportion (win rate).
+ * Widens the interval for small N, so a high point-estimate on thin data
+ * does NOT pass the gate until enough samples confirm it.
+ * z controls confidence: 1.0 ≈ one std-error (pragmatic), 1.96 ≈ 95%.
+ */
+function wilsonLowerBound(p, n, z = 1.0) {
+  if (!n || n <= 0) return 0
+  const z2 = z * z
+  const denom = 1 + z2 / n
+  const center = p + z2 / (2 * n)
+  const margin = z * Math.sqrt((p * (1 - p) + z2 / (4 * n)) / n)
+  return Math.max(0, (center - margin) / denom)
+}
+
+/**
  * Gate: should this (strategy × pattern) combination be blocked?
  *
- * Rules (applied only when pattern is active AND N >= minSamples):
- *   1. win_rate < minWinRate   — historically bad win rate
- *   2. mean_pnl_net < minMeanPnl — avg P&L negative even with some wins
- *   3. confidence < minConfidence — rule-based score also rejected it
+ * Applied only once a pattern is ACTIVE (promoted at N >= PROMOTION_THRESHOLD).
+ * Calibrating patterns are never blocked — we need samples to learn.
  *
- * Never blocks when pattern is calibrating (N < 20 or not active) —
- * we need samples to learn, blocking early starves the library.
+ * Rules (active patterns):
+ *   1. confidence < minConfidence — rule-based score also rejected it
+ *   2. Wilson lower bound of win_rate < minWinRate — no statistically-supported edge.
+ *      Using the lower bound (not the raw win_rate) closes the old dead-zone where a
+ *      clearly-bad pattern (e.g. WR=29%, N=24) escaped the gate purely by being under
+ *      a hard N>=minSamples muzzle.
+ *   3. mean_pnl_net < minMeanPnl — avg P&L negative even with some wins.
  */
 function checkPatternGate(pattern, confidence, gateCfg = {}) {
   const minWinRate    = gateCfg.minWinRate    ?? 0.35
-  const minSamples    = gateCfg.minSamples    ?? 30
   const minMeanPnl    = gateCfg.minMeanPnl    ?? -1.0
   const minConfidence = gateCfg.minConfidence ?? 0.15
+  const wilsonZ       = gateCfg.wilsonZ       ?? 1.0
 
   if (confidence < minConfidence) {
     return { blocked: true, reason: `confidence ${(confidence * 100).toFixed(0)}% < floor ${minConfidence * 100}%` }
   }
-  if (!pattern?.active || pattern.sample_count < minSamples) {
-    return { blocked: false }
+  if (!pattern?.active) {
+    return { blocked: false }  // calibrating — explore freely to gather samples
   }
-  if (pattern.win_rate < minWinRate) {
-    return { blocked: true, reason: `WR ${(pattern.win_rate * 100).toFixed(0)}% < min ${minWinRate * 100}% (N=${pattern.sample_count})` }
+  const lb = wilsonLowerBound(pattern.win_rate ?? 0, pattern.sample_count ?? 0, wilsonZ)
+  if (lb < minWinRate) {
+    return { blocked: true, reason: `WR ${(((pattern.win_rate ?? 0)) * 100).toFixed(0)}% (95%LB ${(lb * 100).toFixed(0)}%) < min ${minWinRate * 100}% (N=${pattern.sample_count})` }
   }
   if (pattern.mean_pnl_net != null && pattern.mean_pnl_net < minMeanPnl) {
     return { blocked: true, reason: `mean P&L ${pattern.mean_pnl_net.toFixed(1)}% < min ${minMeanPnl}% (N=${pattern.sample_count})` }
@@ -78,8 +97,188 @@ function calcTtlMinutes(pool) {
 }
 
 /**
+ * Resolve the screening config for a pipeline profile.
+ * The base `screening` block is the default / bid_ask profile; named profiles
+ * shallow-override it (all screening values are scalar, so a shallow merge is exact).
+ */
+function resolveScreening(cfg, profileKey) {
+  const base = { ...(cfg.screening || {}) }
+  delete base.profiles
+  const override = cfg.screening?.profiles?.[profileKey]
+  const merged = override ? { ...base, ...override } : base
+  // Single source of truth: the spot vol cap derives from strategy.spotMaxVolatility, so the
+  // screener and the router (strategy-router.js:45) can never drift apart.
+  if (profileKey === 'spot' && cfg.strategy?.spotMaxVolatility != null) {
+    merged.maxVolatility = cfg.strategy.spotMaxVolatility
+  }
+  return merged
+}
+
+/**
+ * Score, gate, and (if it passes) record a decision for ONE pool under ONE pipeline.
+ * The pipeline forces `forceStrategy` — it records only that strategy, so each strategy
+ * accumulates samples from its own universe instead of bid_ask winning a single pool.
+ * Returns a decision summary, or null if the pool was skipped/gated/ineligible.
+ */
+function processPool(pool, cfg, forceStrategy) {
+  // Per-token gate check
+  const tokenGate = riskState.check(pool.base?.mint)
+  if (!tokenGate.allowed) {
+    console.log(`[IC] ${pool.base?.symbol} blocked: ${tokenGate.reason}`)
+    return null
+  }
+
+  // Skip pools that already have an active decision — avoid stacking duplicates (also
+  // dedups across pipelines: a pool claimed by one pipeline won't be re-recorded by another)
+  const existing = db.prepare(
+    `SELECT id FROM decisions WHERE pool_address = ? AND status = 'active' LIMIT 1`
+  ).get(pool.pool)
+  if (existing) {
+    console.log(`[IC] ${pool.base?.symbol} already has active decision #${existing.id} — skip`)
+    return null
+  }
+
+  const allScores = scoreStrategies(pool, cfg)
+  const ttlMinutes = calcTtlMinutes(pool)
+  const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString()
+  const bucket = conditionBucket(pool)
+  const { volatility_bucket, regime } = parseBucket(bucket)
+  const gateCfg = cfg.learning?.confidenceGate ?? {}
+  const gateEnabled = gateCfg.enabled !== false
+
+  // This pipeline only considers its own strategy.
+  const score = allScores.find(s => s.strategy === forceStrategy)
+  if (!score || !score.eligible) {
+    console.log(`[IC] ${pool.base?.symbol} ${forceStrategy} not eligible (${score?.reason || 'unknown'}) — skip`)
+    return null
+  }
+
+  const pat = getPattern(volatility_bucket, regime, forceStrategy)
+  const adj = adjustScore(score.score, pat, cfg, forceStrategy)
+  if (pat?.active) {
+    console.log(`[IC] Pattern ${volatility_bucket}×${regime}×${forceStrategy}: WR=${(pat.win_rate*100).toFixed(0)}% N=${pat.sample_count} → ${(score.score*100).toFixed(0)}→${(adj*100).toFixed(0)}%`)
+  }
+  if (gateEnabled) {
+    const gate = checkPatternGate(pat, adj, gateCfg)
+    if (gate.blocked) {
+      console.log(`[IC] Gate blocked ${pool.base?.symbol} ${forceStrategy}: ${gate.reason}`)
+      return null
+    }
+  }
+
+  let confidence = adj
+  const pattern = pat
+
+  // Smart money confirmation: boost confidence if a tracked wallet recently LP'd this pool
+  let smartMoneyConfirmed = false
+  try {
+    const smRow = db.prepare(`
+      SELECT COUNT(DISTINCT wallet_address) as cnt
+      FROM wallet_actions
+      WHERE pool_address = ?
+        AND wallet_type = 'smart_money'
+        AND detected_at > datetime('now', '-24 hours')
+        AND action_type IN ('add_liquidity', 'open_position')
+    `).get(pool.pool)
+    if ((smRow?.cnt || 0) > 0) {
+      smartMoneyConfirmed = true
+      confidence = Math.min(1, confidence * 1.15)
+      console.log(`[IC] 🐋 Smart money signal: ${smRow.cnt} wallet(s) in ${pool.base?.symbol} → conf boosted to ${(confidence*100).toFixed(0)}`)
+    }
+  } catch (e) {
+    console.warn('[IC] Smart money check failed:', e.message)
+  }
+
+  const indicators = {
+    volatility: pool.volatility,
+    fee_active_tvl_ratio: pool.fee_active_tvl_ratio,
+    volume_change_pct: pool.volume_change_pct,
+    price_change_pct: pool.price_change_pct,
+    organic_score: pool.organic_score,
+    holders: pool.holders,
+    price_vs_ath_pct: pool.price_vs_ath_pct,
+    smart_money_buy: pool.smart_money_buy ?? null,
+    smart_money_confirmed: smartMoneyConfirmed,
+    dev_sold_all: pool.dev_sold_all ?? null,
+    risk_level: pool.risk_level ?? null,
+    top10_pct: pool.top10_pct ?? null,
+    dex_boost: pool.dex_boost ?? null,
+    bin_step: pool.bin_step,
+    tvl: pool.tvl,
+    fee_window: pool.fee_window,
+    volume_window: pool.volume_window,
+  }
+
+  try {
+    const result = recordDecision({
+      created_at: new Date().toISOString(),
+      expires_at: expiresAt,
+      token_mint: pool.base?.mint,
+      token_symbol: pool.base?.symbol,
+      pool_address: pool.pool,
+      strategy: forceStrategy,
+      indicators_json: JSON.stringify(indicators),
+      strategy_scores_json: JSON.stringify(allScores),
+      llm_verdict: null,
+      confidence,
+      condition_bucket: bucket,
+    })
+
+    const decisionId = result.lastInsertRowid
+
+    // Open a dry run position immediately so we start tracking P&L
+    try {
+      dryRun.openForDecision(decisionId, pool, forceStrategy)
+    } catch (drErr) {
+      console.error(`[IC] Failed to open dry run for decision #${decisionId}:`, drErr.message)
+    }
+
+    // Telegram alert — fire-and-forget
+    telegram.recommendation({
+      token:      pool.base?.symbol || '?',
+      strategy:   forceStrategy,
+      confidence: Math.round(confidence * 100),
+      ttlMinutes,
+      verdict:    null,
+      poolUrl:    pool.pool ? `https://app.meteora.ag/dlmm/${pool.pool}` : null,
+    }).catch(e => console.warn('[IC] Telegram alert failed:', e.message))
+
+    // Fire-and-forget LLM verdict (only if AI enabled in config)
+    if (cfg.ai?.enabled) {
+      generateVerdict(decisionId, pool, forceStrategy, bucket, indicators, cfg.ai)
+    }
+
+    // Meridian integration — push signal via webhook (fire-and-forget)
+    if (cfg.meridian?.enabled && cfg.meridian?.webhookUrl) {
+      const meridian = require('../meridian/index')
+      meridian.pushRecommendation({
+        decision_id:          decisionId,
+        token_symbol:         pool.base?.symbol,
+        token_mint:           pool.base?.mint,
+        pool_address:         pool.pool,
+        strategy:             forceStrategy,
+        confidence:           confidence,
+        expires_at:           expiresAt,
+        condition_bucket:     bucket,
+        smart_money_confirmed: smartMoneyConfirmed,
+        pool_url:             `https://app.meteora.ag/dlmm/${pool.pool}`,
+      }).catch(() => {})
+    }
+
+    const patStr = pattern?.active ? ` [hist ${(pattern.win_rate*100).toFixed(0)}%/${pattern.sample_count}]` : ''
+    console.log(`[IC] #${decisionId} ${pool.base?.symbol} → ${forceStrategy} (conf=${(confidence*100).toFixed(0)}, ttl=${ttlMinutes}m${patStr})`)
+    return { id: decisionId, pool, strategy: forceStrategy, score: score.score, ttlMinutes, expiresAt, bucket }
+  } catch (e) {
+    console.error(`[IC] Failed to record decision for ${pool.base?.symbol}:`, e.message)
+    return null
+  }
+}
+
+/**
  * Run a full screening + strategy routing cycle.
  * Called automatically by the scheduler every 15 minutes.
+ * Runs one screening pipeline per configured profile (bid_ask, spot), each recording
+ * only its own strategy so every strategy can accumulate learning samples.
  */
 async function runScan() {
   if (_scanning) {
@@ -100,193 +299,49 @@ async function runScan() {
     }
 
     const cfg = getConfig()
-    const { candidates, total_screened, filtered_examples } = await getTopCandidates({
-      limit: cfg.scan?.topCandidateLimit ?? 10,
-    })
+    const limit = cfg.scan?.topCandidateLimit ?? 10
+    const pipelines = cfg.scan?.pipelines ?? [
+      { profile: 'bid_ask', strategy: 'bid_ask' },
+      { profile: 'spot',    strategy: 'spot' },
+    ]
 
     const decisions = []
+    let totalScreened = 0
+    let totalCandidates = 0
 
-    for (const pool of candidates) {
-      // Per-token gate check
-      const tokenGate = riskState.check(pool.base?.mint)
-      if (!tokenGate.allowed) {
-        console.log(`[IC] ${pool.base?.symbol} blocked: ${tokenGate.reason}`)
-        continue
-      }
-
-      // Skip pools that already have an active decision — avoid stacking duplicates
-      const existing = db.prepare(
-        `SELECT id FROM decisions WHERE pool_address = ? AND status = 'active' LIMIT 1`
-      ).get(pool.pool)
-      if (existing) {
-        console.log(`[IC] ${pool.base?.symbol} already has active decision #${existing.id} — skip`)
-        continue
-      }
-
-      const allScores = scoreStrategies(pool, cfg)
-      const ttlMinutes = calcTtlMinutes(pool)
-      const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString()
-      const bucket = conditionBucket(pool)
-      const { volatility_bucket, regime } = parseBucket(bucket)
-      const gateCfg = cfg.learning?.confidenceGate ?? {}
-      const gateEnabled = gateCfg.enabled !== false
-
-      // Strategy selection: iterate eligible strategies best→worst,
-      // skip any that the Pattern Gate blocks, pick the first that passes.
-      const eligible = allScores
-        .filter(s => s.eligible)
-        .sort((a, b) => b.score - a.score)
-
-      let chosen = null
-      for (const s of eligible) {
-        const pat = getPattern(volatility_bucket, regime, s.strategy)
-        const adj = adjustScore(s.score, pat)
-        if (pat?.active) {
-          console.log(`[IC] Pattern ${volatility_bucket}×${regime}×${s.strategy}: WR=${(pat.win_rate*100).toFixed(0)}% N=${pat.sample_count} → ${(s.score*100).toFixed(0)}→${(adj*100).toFixed(0)}%`)
-        }
-        if (gateEnabled) {
-          const gate = checkPatternGate(pat, adj, gateCfg)
-          if (gate.blocked) {
-            console.log(`[IC] Gate blocked ${pool.base?.symbol} ${s.strategy}: ${gate.reason}`)
-            continue
-          }
-        }
-        chosen = { strategy: s.strategy, score: s.score, confidence: adj, pattern: pat }
-        break
-      }
-
-      if (!chosen) {
-        const reasons = eligible.map(s => {
-          const pat = getPattern(volatility_bucket, regime, s.strategy)
-          const adj = adjustScore(s.score, pat)
-          return checkPatternGate(pat, adj, gateCfg).reason || 'no eligible'
-        }).join('; ')
-        console.log(`[IC] ${pool.base?.symbol} ALL strategies gated (${reasons}) — skipping`)
-        continue
-      }
-
-      let confidence = chosen.confidence
-      const pattern = chosen.pattern
-
-      // Smart money confirmation: boost confidence if a tracked wallet recently LP'd this pool
-      let smartMoneyConfirmed = false
+    for (const pipe of pipelines) {
+      const screening = resolveScreening(cfg, pipe.profile)
+      let res
       try {
-        const smRow = db.prepare(`
-          SELECT COUNT(DISTINCT wallet_address) as cnt
-          FROM wallet_actions
-          WHERE pool_address = ?
-            AND wallet_type = 'smart_money'
-            AND detected_at > datetime('now', '-24 hours')
-            AND action_type IN ('add_liquidity', 'open_position')
-        `).get(pool.pool)
-        if ((smRow?.cnt || 0) > 0) {
-          smartMoneyConfirmed = true
-          confidence = Math.min(1, confidence * 1.15)
-          console.log(`[IC] 🐋 Smart money signal: ${smRow.cnt} wallet(s) in ${pool.base?.symbol} → conf boosted to ${(confidence*100).toFixed(0)}`)
-        }
+        res = await getTopCandidates({ limit, screening })
       } catch (e) {
-        console.warn('[IC] Smart money check failed:', e.message)
+        console.error(`[IC] Pipeline ${pipe.profile} screening failed:`, e.message)
+        continue
       }
+      totalScreened += res.total_screened || 0
+      totalCandidates += res.candidates.length
+      console.log(`[IC] Pipeline ${pipe.profile}→${pipe.strategy}: ${res.candidates.length} candidate(s)`)
 
-      const indicators = {
-        volatility: pool.volatility,
-        fee_active_tvl_ratio: pool.fee_active_tvl_ratio,
-        volume_change_pct: pool.volume_change_pct,
-        price_change_pct: pool.price_change_pct,
-        organic_score: pool.organic_score,
-        holders: pool.holders,
-        price_vs_ath_pct: pool.price_vs_ath_pct,
-        smart_money_buy: pool.smart_money_buy ?? null,
-        smart_money_confirmed: smartMoneyConfirmed,
-        dev_sold_all: pool.dev_sold_all ?? null,
-        risk_level: pool.risk_level ?? null,
-        top10_pct: pool.top10_pct ?? null,
-        dex_boost: pool.dex_boost ?? null,
-        bin_step: pool.bin_step,
-        tvl: pool.tvl,
-        fee_window: pool.fee_window,
-        volume_window: pool.volume_window,
-      }
-
-      try {
-        const result = recordDecision({
-          created_at: new Date().toISOString(),
-          expires_at: expiresAt,
-          token_mint: pool.base?.mint,
-          token_symbol: pool.base?.symbol,
-          pool_address: pool.pool,
-          strategy: chosen.strategy,
-          indicators_json: JSON.stringify(indicators),
-          strategy_scores_json: JSON.stringify(allScores),
-          llm_verdict: null,
-          confidence,
-          condition_bucket: bucket,
-        })
-
-        const decisionId = result.lastInsertRowid
-        decisions.push({ id: decisionId, pool, strategy: chosen.strategy, score: chosen.score, ttlMinutes, expiresAt, bucket })
-
-        // Open a dry run position immediately so we start tracking P&L
-        try {
-          dryRun.openForDecision(decisionId, pool, chosen.strategy)
-        } catch (drErr) {
-          console.error(`[IC] Failed to open dry run for decision #${decisionId}:`, drErr.message)
-        }
-
-        // Telegram alert — fire-and-forget
-        telegram.recommendation({
-          token:      pool.base?.symbol || '?',
-          strategy:   chosen.strategy,
-          confidence: Math.round(confidence * 100),
-          ttlMinutes,
-          verdict:    null,
-          poolUrl:    pool.pool ? `https://app.meteora.ag/dlmm/${pool.pool}` : null,
-        }).catch(e => console.warn('[IC] Telegram alert failed:', e.message))
-
-        // Fire-and-forget LLM verdict (only if AI enabled in config)
-        if (cfg.ai?.enabled) {
-          generateVerdict(decisionId, pool, chosen.strategy, bucket, indicators, cfg.ai)
-        }
-
-        // Meridian integration — push signal via webhook (fire-and-forget)
-        if (cfg.meridian?.enabled && cfg.meridian?.webhookUrl) {
-          const meridian = require('../meridian/index')
-          meridian.pushRecommendation({
-            decision_id:          decisionId,
-            token_symbol:         pool.base?.symbol,
-            token_mint:           pool.base?.mint,
-            pool_address:         pool.pool,
-            strategy:             chosen.strategy,
-            confidence:           confidence,
-            expires_at:           expiresAt,
-            condition_bucket:     bucket,
-            smart_money_confirmed: smartMoneyConfirmed,
-            pool_url:             `https://app.meteora.ag/dlmm/${pool.pool}`,
-          }).catch(() => {})
-        }
-
-        const elig = allScores.filter(s => s.eligible).map(s => s.strategy).join('/')
-        const patStr = pattern?.active ? ` [hist ${(pattern.win_rate*100).toFixed(0)}%/${pattern.sample_count}]` : ''
-        console.log(`[IC] #${decisionId} ${pool.base?.symbol} → ${chosen.strategy} (conf=${(confidence*100).toFixed(0)}, ttl=${ttlMinutes}m, elig: ${elig || 'none'}${patStr})`)
-      } catch (e) {
-        console.error(`[IC] Failed to record decision for ${pool.base?.symbol}:`, e.message)
+      for (const pool of res.candidates) {
+        const dec = processPool(pool, cfg, pipe.strategy)
+        if (dec) decisions.push(dec)
       }
     }
 
     const elapsed = Date.now() - started
-    console.log(`[IC] ── Scan done in ${elapsed}ms: ${total_screened} screened → ${candidates.length} passed → ${decisions.length} decisions ──`)
+    console.log(`[IC] ── Scan done in ${elapsed}ms: ${totalScreened} screened → ${totalCandidates} passed → ${decisions.length} decisions ──`)
 
     // Push results to frontend via WebSocket
     bus.emitSafe('ui_update', {
       type: 'scan_result',
       ts: new Date().toISOString(),
-      total_screened,
-      candidates: candidates.length,
+      total_screened: totalScreened,
+      candidates: totalCandidates,
       decisions: decisions.length,
       elapsed_ms: elapsed,
     })
 
-    return { decisions, total_screened, elapsed_ms: elapsed }
+    return { decisions, total_screened: totalScreened, elapsed_ms: elapsed }
   } catch (err) {
     console.error('[IC] Scan error:', err.message)
     bus.emitSafe('ui_update', { type: 'scan_error', error: err.message })
@@ -328,4 +383,4 @@ function init() {
   console.log('[IC] Intelligence Core ready (scan every 15min)')
 }
 
-module.exports = { init, runScan }
+module.exports = { init, runScan, checkPatternGate, wilsonLowerBound, resolveScreening }

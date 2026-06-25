@@ -164,6 +164,13 @@ function migrateSchema() {
     `ALTER TABLE dry_run_positions ADD COLUMN close_reason TEXT`,
     `ALTER TABLE dry_run_positions ADD COLUMN exit_metrics_json TEXT`,
     `ALTER TABLE dry_run_positions ADD COLUMN simulated_fee_pct REAL`,
+    // Single-sided SOL model (2026-06-26): downward price range the SOL liquidity covers
+    // (range_bins × bin_step), used to compute dip-fill P&L instead of a symmetric token bet.
+    `ALTER TABLE dry_run_positions ADD COLUMN range_pct REAL`,
+    // Phase 3a (2026-06-26): EMA win-rate for scoring + cumulative wins for reconciliation.
+    `ALTER TABLE pattern_library ADD COLUMN wins INTEGER DEFAULT 0`,
+    `ALTER TABLE pattern_library ADD COLUMN ema_win_rate REAL`,
+    `ALTER TABLE pattern_library ADD COLUMN last_reconciled_at TEXT`,
   ]
   let added = 0
   for (const sql of cols) {
@@ -189,6 +196,76 @@ function migrateSchema() {
     `)
   } catch (e) {
     if (!e.message?.includes('already exists')) console.warn('[Schema] screening_rejections:', e.message)
+  }
+
+  // capability_gaps table — self-diagnosis: sustained eligibility/screening blind spots
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS capability_gaps (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        signature         TEXT    NOT NULL UNIQUE,   -- kind|reason_key|strategy
+        kind              TEXT    NOT NULL,          -- missing_indicator|universe_mismatch|threshold_saturation|data_quality
+        reason_key        TEXT,
+        strategy          TEXT,
+        severity          TEXT,                      -- low|medium|high
+        saturation_pct    REAL,
+        denominator       INTEGER,
+        sustained_scans   INTEGER,
+        observation_count INTEGER,
+        status            TEXT    DEFAULT 'open',     -- open|resolved|muted
+        first_seen_at     TEXT,
+        last_seen_at      TEXT,
+        evidence_json     TEXT,
+        suggested_action  TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_capgap_status ON capability_gaps(status);
+    `)
+  } catch (e) {
+    if (!e.message?.includes('already exists')) console.warn('[Schema] capability_gaps:', e.message)
+  }
+
+  // system_reports table — Phase 5 self-report (deterministic or LLM-narrated status snapshots)
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS system_reports (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        generated_at TEXT    NOT NULL,
+        via          TEXT    CHECK(via IN ('deterministic','llm')),
+        llm_fallback INTEGER DEFAULT 0,
+        report_text  TEXT,
+        bundle_json  TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_sysreport_gen ON system_reports(generated_at);
+    `)
+  } catch (e) {
+    if (!e.message?.includes('already exists')) console.warn('[Schema] system_reports:', e.message)
+  }
+
+  // tuning_events table — Phase 4B auto-tuner audit (proposals/applies/reverts)
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS tuning_events (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at      TEXT    NOT NULL,
+        param_path      TEXT    NOT NULL,
+        old_value       REAL,
+        new_value       REAL,
+        delta           REAL,
+        strategy        TEXT,
+        reason          TEXT,
+        sample_count    INTEGER,
+        win_rate        REAL,
+        wilson_lb       REAL,
+        mean_pnl_net    REAL,
+        metric_confidence TEXT,
+        mode            TEXT CHECK(mode IN ('shadow','apply')),
+        status          TEXT CHECK(status IN ('proposed','applied','reverted','rejected')),
+        reverted_from   INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_tuning_created ON tuning_events(created_at);
+    `)
+  } catch (e) {
+    if (!e.message?.includes('already exists')) console.warn('[Schema] tuning_events:', e.message)
   }
 
   try {
@@ -238,10 +315,12 @@ function recordDryRunPosition(data) {
   return getStmt('insertDryRun', `
     INSERT INTO dry_run_positions
       (decision_id, opened_at, token_mint, token_symbol, pool_address, strategy,
-       entry_price_sol, entry_bin, range_bins, sol_amount, simulated_slippage_pct, tx_cost_usd)
+       entry_price_sol, entry_bin, range_bins, sol_amount, simulated_slippage_pct, tx_cost_usd,
+       entry_fee_rate, fee_window_minutes, range_pct)
     VALUES
       (@decision_id, @opened_at, @token_mint, @token_symbol, @pool_address, @strategy,
-       @entry_price_sol, @entry_bin, @range_bins, @sol_amount, @simulated_slippage_pct, @tx_cost_usd)
+       @entry_price_sol, @entry_bin, @range_bins, @sol_amount, @simulated_slippage_pct, @tx_cost_usd,
+       @entry_fee_rate, @fee_window_minutes, @range_pct)
   `).run(data)
 }
 
@@ -284,9 +363,96 @@ function recordWalletAction(data) {
   `).run(data)
 }
 
+/**
+ * Authoritative pattern write used by the reconciliation job — overwrites win_rate/wins/
+ * mean_pnl/sample_count/active recomputed from source. Does NOT touch ema_win_rate (no
+ * per-sample replay in v1; the EMA is a best-effort live-scoring signal only).
+ */
+function recordPatternReconciled(vb, regime, strategy, d) {
+  return getStmt('reconcilePattern', `
+    INSERT INTO pattern_library
+      (updated_at, volatility_bucket, regime, strategy, win_rate, mean_pnl_net, sample_count, active, wins, last_reconciled_at)
+    VALUES (@updated_at, @vb, @regime, @strategy, @win_rate, @mean_pnl_net, @sample_count, @active, @wins, @last_reconciled_at)
+    ON CONFLICT(volatility_bucket, regime, strategy) DO UPDATE SET
+      updated_at         = excluded.updated_at,
+      win_rate           = excluded.win_rate,
+      mean_pnl_net       = excluded.mean_pnl_net,
+      sample_count       = excluded.sample_count,
+      active             = excluded.active,
+      wins               = excluded.wins,
+      last_reconciled_at = excluded.last_reconciled_at
+  `).run({ vb, regime, strategy, ...d })
+}
+
+/**
+ * Insert a new capability gap or refresh an existing one (by signature).
+ * Returns { inserted } so the caller alerts only on the OPEN transition, never on refresh.
+ */
+function openOrUpdateGap(g) {
+  const existing = db.prepare(`SELECT id, status FROM capability_gaps WHERE signature = ?`).get(g.signature)
+  if (existing) {
+    db.prepare(`
+      UPDATE capability_gaps SET
+        severity = @severity, saturation_pct = @saturation_pct, denominator = @denominator,
+        sustained_scans = @sustained_scans, observation_count = @observation_count,
+        last_seen_at = @last_seen_at, evidence_json = @evidence_json, suggested_action = @suggested_action,
+        status = CASE WHEN status = 'muted' THEN 'muted' ELSE 'open' END
+      WHERE signature = @signature
+    `).run(g)
+    return { inserted: false, reopened: existing.status === 'resolved' }
+  }
+  db.prepare(`
+    INSERT INTO capability_gaps
+      (signature, kind, reason_key, strategy, severity, saturation_pct, denominator,
+       sustained_scans, observation_count, status, first_seen_at, last_seen_at, evidence_json, suggested_action)
+    VALUES
+      (@signature, @kind, @reason_key, @strategy, @severity, @saturation_pct, @denominator,
+       @sustained_scans, @observation_count, 'open', @first_seen_at, @last_seen_at, @evidence_json, @suggested_action)
+  `).run(g)
+  return { inserted: true }
+}
+
+/** Resolve open gaps not re-observed since `beforeIso` (the diagnosis window). */
+function resolveStaleGaps(beforeIso) {
+  return db.prepare(
+    `UPDATE capability_gaps SET status = 'resolved' WHERE status = 'open' AND last_seen_at < ?`
+  ).run(beforeIso)
+}
+
+function listOpenGaps() {
+  return db.prepare(`
+    SELECT * FROM capability_gaps WHERE status = 'open'
+    ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, last_seen_at DESC
+  `).all()
+}
+
+function recordSystemReport(d) {
+  return db.prepare(`
+    INSERT INTO system_reports (generated_at, via, llm_fallback, report_text, bundle_json)
+    VALUES (@generated_at, @via, @llm_fallback, @report_text, @bundle_json)
+  `).run(d)
+}
+
+function recordTuningEvent(d) {
+  return db.prepare(`
+    INSERT INTO tuning_events
+      (created_at, param_path, old_value, new_value, delta, strategy, reason, sample_count,
+       win_rate, wilson_lb, mean_pnl_net, metric_confidence, mode, status, reverted_from)
+    VALUES
+      (@created_at, @param_path, @old_value, @new_value, @delta, @strategy, @reason, @sample_count,
+       @win_rate, @wilson_lb, @mean_pnl_net, @metric_confidence, @mode, @status, @reverted_from)
+  `).run(d)
+}
+
+function getTuningEvents(limit = 20) {
+  return db.prepare(`SELECT * FROM tuning_events ORDER BY created_at DESC LIMIT ?`).all(limit)
+}
+
 module.exports = {
   initSchema, db,
   recordDecision, expireDecision, markFollowed,
   recordDryRunPosition, closeDryRunPosition,
-  recordWalletAction, recordRejection,
+  recordWalletAction, recordRejection, recordPatternReconciled,
+  openOrUpdateGap, resolveStaleGaps, listOpenGaps,
+  recordSystemReport, recordTuningEvent, getTuningEvents,
 }

@@ -11,6 +11,7 @@ const FAST_EVENTS = new Set([
   'recommendation_expired', // TTL hit — verdict invalidated
   'heartbeat',              // Scheduler pulse
   'ttl_check',              // TTL check cycle
+  'config_updated',         // user-config.json written at runtime (writeUserConfig)
 ])
 
 // Slow path — AI and memory operations (1-10s SLA)
@@ -24,6 +25,13 @@ const SLOW_EVENTS = new Set([
   'outcome_recorded',        // Dry run position closed with result
   'blacklist_updated',       // Token/deployer added to blacklist
   'tracked_wallets_updated', // Hivemind discovered new wallets
+  'pattern_reconciliation',  // Recompute authoritative pattern stats from source
+  'capability_diagnosis',    // Self-diagnosis aggregation cycle
+  'capability_gap_detected', // A new capability gap was opened
+  'self_report_due',         // Time to generate the consolidated status report
+  'tuner_cycle',             // Auto-tuner evaluation tick
+  'tuning_proposal',         // Auto-tuner proposed a bounded delta (shadow)
+  'tuning_applied',          // Auto-tuner / operator applied a tuning delta
 ])
 
 const ALL_EVENTS = new Set([...FAST_EVENTS, ...SLOW_EVENTS])

@@ -53,6 +53,36 @@ function start() {
     console.log('[Scheduler] Daily reset completed')
   })
 
+  // ── Pattern reconciliation: recompute authoritative stats from source ──────
+  const learnCfg = require('../config').getConfig().learning || {}
+  if (learnCfg.reconcileEnabled !== false) {
+    schedule('pattern-reconcile', learnCfg.reconcileCron || '0 */6 * * *', () => {
+      bus.emitSafe('pattern_reconciliation', { ts: Date.now() })
+    })
+  }
+
+  // ── Self-diagnosis: surface sustained capability gaps ──────────────────────
+  if (learnCfg.diagnosis?.enabled !== false) {
+    schedule('capability-diagnosis', learnCfg.diagnosis?.cron || '0 */6 * * *', () => {
+      bus.emitSafe('capability_diagnosis', { ts: Date.now() })
+    })
+  }
+
+  // ── Daily self-report digest (consolidated status) ─────────────────────────
+  const aiCfg = require('../config').getConfig().ai || {}
+  if (aiCfg.selfReport?.enabled !== false && aiCfg.selfReport?.digestCron) {
+    schedule('self-report-digest', aiCfg.selfReport.digestCron, () => {
+      bus.emitSafe('self_report_due', { ts: Date.now() })
+    })
+  }
+
+  // ── Auto-tuner cycle (no-op while learning.autoTuner.enabled = false) ──────
+  if (learnCfg.autoTuner?.enabled) {
+    schedule('auto-tune', learnCfg.autoTuner.intervalCron || '0 */1 * * *', () => {
+      bus.emitSafe('tuner_cycle', { ts: Date.now() })
+    })
+  }
+
   console.log(`[Scheduler] ${jobs.size} jobs scheduled`)
 }
 

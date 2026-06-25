@@ -151,6 +151,32 @@ class TelegramNotifier {
     )
   }
 
+  // Immediate alert for a HIGH-severity capability gap (structural blind spot). Lower-severity
+  // gaps ride the daily system report instead (consolidated digest).
+  capabilityAlert({ kind, strategy, reason_key, saturation_pct, suggested_action }) {
+    return this.send(
+      `🧩 <b>Capability Gap</b> — ${kind}${strategy ? ` (${strategy})` : ''}\n` +
+      `${reason_key} saturated ${saturation_pct}%\n${suggested_action || ''}`,
+      'P2'
+    )
+  }
+
+  // Consolidated daily status digest (Phase 5). Narration of pre-computed stats only.
+  systemReport(text) {
+    return this.send(
+      `${text}\n\n<i>Status narration of pre-computed statistics. Does not place trades, change config, or constitute a recommendation.</i>`,
+      'P3'
+    )
+  }
+
+  // Auto-tuner shadow proposal (Phase 4B). Informational; APPLY requires explicit approval.
+  tuningProposal({ param_path, old_value, new_value, reason }) {
+    return this.send(
+      `🎛️ <b>Tuner proposal (shadow)</b>\n${param_path}: ${old_value} → ${new_value}\n${reason || ''}`,
+      'P2'
+    )
+  }
+
   boot(port) {
     const serverUrl = process.env.ARGUS_SERVER_URL || `http://localhost:${port}`
     return this.send(

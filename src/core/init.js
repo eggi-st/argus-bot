@@ -22,6 +22,16 @@ async function init() {
   const { initSchema } = require('../db/schema')
   initSchema()
 
+  // Config write-path sanity: confirm the user-config dir is writable so a runtime
+  // writeUserConfig() (auto-tuner) cannot silently fail mid-run.
+  try {
+    const fs = require('fs')
+    const dir = require('path').dirname(require('path').join(process.cwd(), 'user-config.json'))
+    fs.accessSync(dir, fs.constants.W_OK)
+  } catch (e) {
+    console.warn('[Init] ⚠️  user-config dir not writable — runtime config writes will fail:', e.message)
+  }
+
   const riskState = require('./risk-state')
   const rs = riskState.state
   const riskStatus = rs.circuit_breaker_open
@@ -52,6 +62,10 @@ async function init() {
   process.stdout.write('[Init] Layer 4 · Pattern Library... ')
   const learning = require('../learning/index')
   learning.init()
+  require('../learning/reconcile').init()
+  require('../intelligence/diagnostics').init()
+  require('../ai/system-report').init()
+  require('../learning/auto-tuner').init()
   console.log('✓')
 
   process.stdout.write('[Init] Layer 4 · Hivemind Discovery... ')

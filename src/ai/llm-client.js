@@ -10,6 +10,7 @@ async function callLLM(prompt, cfg = {}) {
   const model  = cfg.model      || 'llama3'
   const maxTok = cfg.maxTokens  || 100
   const timeMs = cfg.timeoutMs  || 20_000
+  const temp   = cfg.temperature != null ? cfg.temperature : 0.3  // self-report uses 0 (faithful)
 
   const res = await fetch(url, {
     method:  'POST',
@@ -17,7 +18,7 @@ async function callLLM(prompt, cfg = {}) {
     body: JSON.stringify({
       model,
       messages:    [{ role: 'user', content: prompt }],
-      temperature: 0.3,
+      temperature: temp,
       max_tokens:  maxTok,
       stream:      false,
     }),

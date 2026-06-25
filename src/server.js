@@ -402,6 +402,60 @@ app.get('/api/screening-rejections', (req, res) => {
   }
 })
 
+app.get('/api/capability-gaps', (req, res) => {
+  try {
+    const status = req.query.status || 'open'
+    const rows = status === 'all'
+      ? db.prepare(`SELECT * FROM capability_gaps ORDER BY last_seen_at DESC LIMIT 200`).all()
+      : db.prepare(`SELECT * FROM capability_gaps WHERE status = ? ORDER BY
+          CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, last_seen_at DESC`).all(status)
+    res.json({ gaps: rows })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.get('/api/self-report', async (req, res) => {
+  try {
+    if (req.query.fresh === '1') {
+      const r = await require('./ai/system-report').generateSystemReport()
+      return res.json({ via: r?.via, text: r?.text, fresh: true })
+    }
+    const row = db.prepare(`SELECT * FROM system_reports ORDER BY generated_at DESC LIMIT 1`).get()
+    res.json({ report: row || null })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.get('/api/tuning-events', (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit || '50', 10), 200)
+    res.json({ events: require('./db/schema').getTuningEvents(limit) })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/api/tuning-events/:id/approve', express.json(), (req, res) => {
+  try {
+    const r = require('./learning/auto-tuner').approveProposal(parseInt(req.params.id, 10))
+    res.status(r.ok ? 200 : 400).json(r)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/api/tuning-events/:id/reject', express.json(), (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10)
+    const n = db.prepare(`UPDATE tuning_events SET status='rejected' WHERE id=? AND status='proposed'`).run(id)
+    res.json({ ok: n.changes > 0 })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ── Meridian Feedback History ─────────────────────────────────────────────────
 // Show decisions that Meridian actually followed + outcomes received
 app.get('/api/feedback/history', (req, res) => {
@@ -478,6 +532,7 @@ function setupWebSocket(server) {
     bus.onFast('alert_triggered', (payload) => broadcast({ type: 'alert_triggered', ...payload }))
     bus.onSlow('wallet_action_detected', (payload) => broadcast({ type: 'wallet_action_detected', ...payload }))
     bus.onSlow('tracked_wallets_updated', (payload) => broadcast({ type: 'tracked_wallets_updated', ...payload }))
+    bus.onSlow('capability_gap_detected', (payload) => broadcast({ type: 'capability_gap_detected', ...payload }))
   }
 }
 

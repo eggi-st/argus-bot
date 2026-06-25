@@ -200,11 +200,13 @@ async function enrichWithOkx(pools) {
     })
   )
 
+  let okxCalls = 0, advFail = 0, priceFail = 0, riskFail = 0
   for (let i = 0; i < pools.length; i++) {
     const r = results[i]
     if (r.status !== 'fulfilled') continue
     const { adv, price, risk } = r.value
     const p = pools[i]
+    okxCalls++
     if (adv) {
       p.risk_level = adv.risk_level
       p.bundle_pct = adv.bundle_pct
@@ -215,17 +217,19 @@ async function enrichWithOkx(pools) {
       p.is_honeypot = adv.is_honeypot
       p.dex_boost = adv.dex_boost
       if (adv.creator && !p.dev) p.dev = adv.creator
-    }
+    } else advFail++
     if (price) {
       p.price_vs_ath_pct = price.price_vs_ath_pct
       p.ath = price.ath
       if (price.holders != null && p.holders == null) p.holders = price.holders
-    }
+    } else priceFail++
     if (risk) {
       p.is_rugpull = risk.is_rugpull
       p.is_wash = risk.is_wash
-    }
+    } else riskFail++
   }
+  // Surface silent OKX throttling/timeouts (Promise.allSettled swallows them otherwise)
+  log('screener', `OKX enriched ${okxCalls}/${pools.length} pool(s) — sub-call fails: adv=${advFail} price=${priceFail} risk=${riskFail}`)
 }
 
 // ── Hard reject reasons ────────────────────────────────────────────────────────
@@ -325,8 +329,8 @@ function condensePool(p, volatilityTf) {
  * Fetch pools from Meteora Pool Discovery, apply screening filters.
  * Returns { pools, total, filtered_examples }
  */
-async function discoverPools({ page_size = 50 } = {}) {
-  const s = getConfig().screening
+async function discoverPools({ page_size = 50, screening } = {}) {
+  const s = screening || getConfig().screening
   const targetTf = getVolatilityTf(s.timeframe)
 
   const filters = [
@@ -406,11 +410,13 @@ async function discoverPools({ page_size = 50 } = {}) {
  * Get top screened candidates with OKX enrichment applied.
  * Returns { candidates, total_screened, filtered_examples }
  */
-async function getTopCandidates({ limit = 10 } = {}) {
-  const discovery = await discoverPools({ page_size: 50 })
+async function getTopCandidates({ limit = 10, screening } = {}) {
+  const discovery = await discoverPools({ page_size: 50, screening })
   const { pools, total, filtered_examples } = discovery
 
-  // Deduplicate by base mint, sort by score, take top 2× limit for OKX enrichment
+  // Deduplicate by base mint, sort by score, enrich only the top (limit + small buffer).
+  // Buffer covers the few that post-enrichment hard filters (wash/rug/honeypot) will drop,
+  // so we still land ~limit candidates without tripling OKX load per pipeline.
   const seen = new Set()
   const deduped = pools
     .filter(p => {
@@ -420,7 +426,7 @@ async function getTopCandidates({ limit = 10 } = {}) {
       return true
     })
     .sort((a, b) => scoreCandidate(b) - scoreCandidate(a))
-    .slice(0, limit * 2)
+    .slice(0, limit + 5)
 
   // OKX enrichment (parallel)
   if (deduped.length > 0) {

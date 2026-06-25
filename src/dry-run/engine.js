@@ -11,6 +11,52 @@ const SNAPSHOT_TF_MINUTES = 30
 // In-range efficiency factor: fraction of hold time estimated to be in active range
 const IN_RANGE_FACTOR = 0.6
 
+/**
+ * Conservative LP fee estimate in PERCENTAGE POINTS (same unit as gross_pnl_pct).
+ *   entryFeeRate = fee_active_tvl_ratio, a fraction (1.01 = 101% of active TVL / window).
+ *   fee ≈ feeRate × (hold / window) × in-range fraction, ×100 to convert fraction → pp,
+ *   then clamped to maxFeePct so an extreme/unverified pool yield can't dominate the signal.
+ * Pure + exported for testing. Returns 0 when fees are disabled or inputs are missing.
+ */
+function computeSimulatedFeePct(entryFeeRate, holdMinutes, feeWindowMins, opts = {}) {
+  const simulateFees  = opts.simulateFees !== false
+  const maxFeePct     = opts.maxFeePct ?? 10
+  const inRangeFactor = opts.inRangeFactor ?? IN_RANGE_FACTOR
+  if (!simulateFees || entryFeeRate == null || !(holdMinutes > 0) || !(feeWindowMins > 0)) return 0
+  const raw = entryFeeRate * (holdMinutes / feeWindowMins) * inRangeFactor * 100
+  const capped = Math.min(Math.max(raw, 0), maxFeePct)
+  return Math.round(capped * 100) / 100
+}
+
+/**
+ * Downward price range (as a fraction) that a strategy's SOL liquidity covers below entry.
+ * range_bins (per strategy) × bin_step (basis points → fraction). Clamped to (0.01, 0.99).
+ */
+function rangePctForStrategy(strategy, binStep) {
+  const bins = RANGE_BINS_BY_STRATEGY[strategy] ?? 34
+  const step = (binStep > 0 ? binStep : 100) / 10000  // bin_step is in basis points; 100 bps = 1%/bin
+  return Math.min(0.99, Math.max(0.01, bins * step))
+}
+
+/**
+ * Single-sided SOL (quote) liquidity P&L in PERCENTAGE POINTS, relative to the initial SOL capital.
+ * Meridian places SOL-only liquidity as a "bid" spread across bins from entryPrice down to
+ * entryPrice × (1 − rangeFraction):
+ *   - price rises (≥ entry) → SOL never converts → 0 price P&L (fees handled separately);
+ *   - price dips into the range → that fraction of SOL buys the token at a below-entry average,
+ *     now worth currentPrice → impermanent loss, bounded at −100% (token → 0, all SOL spent).
+ * Uniform distribution is assumed (Argus has no per-bin shape; Meridian owns the real shape).
+ * Pure + exported for testing.
+ */
+function computeSingleSidedPnlPct(entryPrice, currentPrice, rangeFraction) {
+  if (!(entryPrice > 0) || !(currentPrice > 0) || !(rangeFraction > 0)) return 0
+  if (currentPrice >= entryPrice) return 0
+  const f = Math.min(1, (entryPrice - currentPrice) / (entryPrice * rangeFraction))  // capital converted
+  const fillFloor = Math.max(currentPrice, entryPrice * (1 - rangeFraction))
+  const avgFill = (entryPrice + fillFloor) / 2  // avg price the converted SOL bought token at
+  return f * (currentPrice / avgFill - 1) * 100
+}
+
 async function getPriceForPosition(tokenMint, poolAddress) {
   if (poolAddress) {
     try {
@@ -63,6 +109,7 @@ function openForDecision(decisionId, pool, strategy) {
       tx_cost_usd:           0.002,
       entry_fee_rate:        pool.fee_active_tvl_ratio ?? null,
       fee_window_minutes:    SNAPSHOT_TF_MINUTES,
+      range_pct:             rangePctForStrategy(strategy, pool.bin_step),
     })
     console.log(`[DryRun] Opened #${result.lastInsertRowid}: ${pool.base.symbol} → ${strategy} @ ${pool.price} SOL (${solAmount} SOL stake)`)
   } catch (e) {
@@ -78,6 +125,7 @@ async function updateOpenPositions() {
   const positions = db.prepare(`
     SELECT dr.id, dr.token_mint, dr.token_symbol, dr.pool_address, dr.strategy,
            dr.entry_price_sol, dr.opened_at, dr.simulated_slippage_pct, dr.sol_amount,
+           dr.entry_fee_rate, dr.fee_window_minutes, dr.range_pct,
            d.expires_at AS decision_expires_at
     FROM dry_run_positions dr
     JOIN decisions d ON d.id = dr.decision_id
@@ -117,31 +165,39 @@ async function updateOpenPositions() {
         continue  // wait for next cycle to close — just entered
       }
 
-      const grossPnlPct  = ((currentPrice - pos.entry_price_sol) / pos.entry_price_sol) * 100
+      const priceMovePct = ((currentPrice - pos.entry_price_sol) / pos.entry_price_sol) * 100  // raw token move (exit signal)
       const holdMinutes  = Math.floor((Date.now() - new Date(pos.opened_at).getTime()) / 60_000)
       const decExpired   = pos.decision_expires_at && new Date(pos.decision_expires_at) < new Date()
-      const slipBothWays = (pos.simulated_slippage_pct ?? 0.3) * 2
-      const netPnlPct    = grossPnlPct - slipBothWays
 
+      // Exit triggers use the raw token price move as a position-management signal:
+      //   price dumping → stop out; price ran far above the range → withdraw (SOL intact, opportunity over).
       const closeReason =
-        stopLoss    != null && grossPnlPct < stopLoss   ? 'stop_loss'    :
-        takeProfit  != null && grossPnlPct > takeProfit ? 'take_profit'  :
-        holdMinutes > maxHoldMins                        ? 'max_hold'     :
-        decExpired                                       ? 'ttl_expired'  :
+        stopLoss    != null && priceMovePct < stopLoss   ? 'stop_loss'    :
+        takeProfit  != null && priceMovePct > takeProfit ? 'take_profit'  :
+        holdMinutes > maxHoldMins                         ? 'max_hold'     :
+        decExpired                                        ? 'ttl_expired'  :
         null
 
       if (closeReason) {
-        // Simulate fee income: entry_fee_rate (fee/TVL over fee_window) × hold fraction × in-range factor
-        let simulatedFeePct = 0
-        const entryFeeRate   = pos.entry_fee_rate ?? null
-        const feeWindowMins  = pos.fee_window_minutes ?? SNAPSHOT_TF_MINUTES
-        if (entryFeeRate != null && holdMinutes > 0) {
-          simulatedFeePct = entryFeeRate * (holdMinutes / feeWindowMins) * IN_RANGE_FACTOR
-          simulatedFeePct = Math.round(simulatedFeePct * 10000) / 10000
-        }
+        // SINGLE-SIDED SOL P&L: Meridian deploys SOL-only liquidity as a "bid" in bins BELOW entry.
+        //   price rises → SOL never converts → ~0 price P&L (only fees);
+        //   price dips into range → that fraction of SOL buys the token below entry, now worth
+        //   currentPrice → impermanent loss. computeSingleSidedPnlPct() models this from the range
+        //   width (range_pct). This REPLACES the old symmetric token-hold proxy, which wrongly
+        //   credited full token upside that a SOL-only position never earns.
+        // Fee income (computeSimulatedFeePct) is a conservative, capped ESTIMATE in pp, not a full
+        //   DLMM fee model. net_pnl_pct = single-sided position P&L + capped fee − slippage.
+        const feeCfg        = getConfig().dryRun || {}
+        const feeWindowMins = pos.fee_window_minutes ?? SNAPSHOT_TF_MINUTES
+        const simulatedFeePct = computeSimulatedFeePct(
+          pos.entry_fee_rate ?? null, holdMinutes, feeWindowMins,
+          { simulateFees: feeCfg.simulateFees, maxFeePct: feeCfg.maxSimulatedFeePct, inRangeFactor: feeCfg.inRangeFactor }
+        )
 
-        // Net P&L = gross price change + fee income − slippage both ways
-        const slipBothWays = (pos.simulated_slippage_pct ?? 0.3) * 2
+        const rangeFraction  = pos.range_pct ?? rangePctForStrategy(pos.strategy, null)
+        const grossPnlPct    = computeSingleSidedPnlPct(pos.entry_price_sol, currentPrice, rangeFraction)
+        // Net P&L = single-sided position P&L + capped fee estimate − slippage both ways (all in pp)
+        const slipBothWays   = (pos.simulated_slippage_pct ?? 0.3) * 2
         const finalNetPnlPct = grossPnlPct + simulatedFeePct - slipBothWays
 
         closeDryRunPosition(pos.id, {
@@ -151,13 +207,18 @@ async function updateOpenPositions() {
           net_pnl_pct:        Math.round(finalNetPnlPct  * 100) / 100,
           hold_minutes:       holdMinutes,
           close_reason:       closeReason,
-          exit_metrics_json:  exitSnapshot ? JSON.stringify(exitSnapshot) : null,
+          exit_metrics_json:  JSON.stringify({
+            ...(exitSnapshot || {}),
+            price_move_pct: Math.round(priceMovePct * 100) / 100,
+            range_pct:      rangeFraction,
+            model:          'single_sided_sol',
+          }),
           simulated_fee_pct:  simulatedFeePct,
         })
 
-        const dir = grossPnlPct >= 0 ? '▲' : '▼'
-        const feeStr = simulatedFeePct > 0 ? ` fee=+${(simulatedFeePct*100).toFixed(2)}%` : ''
-        console.log(`[DryRun] Closed #${pos.id} ${pos.token_symbol} ${dir}${Math.abs(grossPnlPct).toFixed(2)}% net=${finalNetPnlPct.toFixed(2)}%${feeStr} (${closeReason}, hold=${holdMinutes}m)`)
+        const dir = priceMovePct >= 0 ? '▲' : '▼'
+        const feeStr = simulatedFeePct > 0 ? ` fee=+${simulatedFeePct.toFixed(2)}%` : ''
+        console.log(`[DryRun] Closed #${pos.id} ${pos.token_symbol} price${dir}${Math.abs(priceMovePct).toFixed(2)}% → pos=${grossPnlPct.toFixed(2)}% net=${finalNetPnlPct.toFixed(2)}%${feeStr} (${closeReason}, hold=${holdMinutes}m)`)
 
         bus.emitSafe('outcome_recorded', {
           position_id:       pos.id,
@@ -252,6 +313,7 @@ function bootstrap() {
         tx_cost_usd:            0.002,
         entry_fee_rate:         null,   // not available at bootstrap — filled later if possible
         fee_window_minutes:     SNAPSHOT_TF_MINUTES,
+        range_pct:              rangePctForStrategy(dec.strategy, null),
       })
       console.log(`[DryRun] Bootstrap: opened position for orphaned decision #${dec.id} (${dec.token_symbol})`)
     } catch (e) {
@@ -269,4 +331,4 @@ function init() {
   console.log('[DryRun] Dry Run Engine ready')
 }
 
-module.exports = { init, openForDecision, updateOpenPositions, getStats }
+module.exports = { init, openForDecision, updateOpenPositions, getStats, computeSimulatedFeePct, computeSingleSidedPnlPct, rangePctForStrategy }
