@@ -231,14 +231,41 @@ app.post('/api/meridian/webhook/test', async (req, res) => {
 // Meridian pushes real trade outcomes here so Argus Pattern Library learns from
 // actual execution results, not just dry-run simulations.
 
+// Compute Argus volatility bucket from raw vol value (mirrors IC screener logic)
+function computeVolBucket(vol) {
+  if (vol == null || !Number.isFinite(vol)) return null
+  if (vol > 2) return 'high'
+  if (vol > 1) return 'medium'
+  return 'low'
+}
+
+// Compute Argus regime from pool metrics (mirrors IC screener logic)
+function computeRegime(feeTvl, pricePct, volPct) {
+  if (Number.isFinite(pricePct) && Number.isFinite(volPct) && pricePct > 5 && volPct > 30) return 'recovery'
+  if (Number.isFinite(pricePct) && pricePct < -5) return 'decline'
+  if (Number.isFinite(feeTvl) && feeTvl > 0.3) return 'froth'
+  return 'neutral'
+}
+
 app.post('/api/feedback', (req, res) => {
   try {
-    const { source, pool_address, strategy, pnl_pct, minutes_held, close_reason, volatility, fee_tvl_ratio } = req.body || {}
+    const {
+      source, pool_address, strategy, pnl_pct, minutes_held, close_reason,
+      volatility, fee_tvl_ratio, price_change_pct, volume_change_pct,
+    } = req.body || {}
 
     if (source !== 'meridian') return res.status(400).json({ error: 'source must be meridian' })
     if (!pool_address || !strategy || pnl_pct == null) {
       return res.status(400).json({ error: 'pool_address, strategy, pnl_pct required' })
     }
+
+    const bus = require('./core/event-bus')
+    const win = pnl_pct > 0
+
+    // Compute Argus-native condition_bucket from raw metrics
+    const volBucket = computeVolBucket(volatility)
+    const regime    = computeRegime(fee_tvl_ratio, price_change_pct, volume_change_pct)
+    const computedBucket = (volBucket && regime) ? `${volBucket}_${regime}` : null
 
     // Find the matching active or recently expired decision for this pool
     const decision = db.prepare(`
@@ -249,32 +276,47 @@ app.post('/api/feedback', (req, res) => {
     `).get(pool_address, strategy)
 
     if (!decision) {
-      console.log(`[Argus] Feedback received from Meridian for ${pool_address.slice(0, 8)} but no matching decision found — storing as unlinked outcome`)
-      return res.json({ ok: true, linked: false })
+      // No linked decision — still update Pattern Library if we have enough signal
+      if (!computedBucket) {
+        console.log(`[Argus] Meridian feedback for ${pool_address.slice(0, 8)}: no matching decision, no bucket computable — skipped`)
+        return res.json({ ok: true, linked: false, pattern_updated: false })
+      }
+      bus.emitSafe('outcome_recorded', {
+        position_id:     null,
+        condition_bucket: computedBucket,
+        strategy,
+        net_pnl_pct:     pnl_pct,
+        hold_minutes:    minutes_held ?? null,
+        win,
+        source: 'meridian_unlinked',
+      })
+      console.log(`[Argus] Meridian feedback (unlinked): ${pool_address.slice(0, 8)} ${strategy} pnl=${pnl_pct.toFixed(2)}% bucket=${computedBucket}`)
+      return res.json({ ok: true, linked: false, pattern_updated: true, bucket: computedBucket, win })
     }
 
+    // Prefer the linked decision's condition_bucket, fallback to computed
+    const effectiveBucket = decision.condition_bucket || computedBucket
+
     // Mark the decision as followed with outcome
-    const win = pnl_pct > 0
     db.prepare(`
       UPDATE decisions
       SET status = 'followed', followed = 1, outcome_pnl_pct = ?, outcome_known = 1, win = ?
       WHERE id = ?
     `).run(pnl_pct, win ? 1 : 0, decision.id)
 
-    // Feed into Pattern Library via the learning bus
-    const bus = require('./core/event-bus')
     bus.emitSafe('outcome_recorded', {
-      position_id:  decision.id,
+      position_id:      decision.id,
+      condition_bucket: effectiveBucket,
       pool_address,
       strategy,
-      net_pnl_pct:  pnl_pct,
-      hold_minutes: minutes_held ?? null,
+      net_pnl_pct:      pnl_pct,
+      hold_minutes:     minutes_held ?? null,
       win,
       source: 'meridian_feedback',
     })
 
-    console.log(`[Argus] Meridian feedback recorded: ${pool_address.slice(0, 8)} ${strategy} pnl=${pnl_pct.toFixed(2)}% → decision #${decision.id} (win=${win})`)
-    res.json({ ok: true, linked: true, decision_id: decision.id, win })
+    console.log(`[Argus] Meridian feedback: ${pool_address.slice(0, 8)} ${strategy} pnl=${pnl_pct.toFixed(2)}% → decision #${decision.id} bucket=${effectiveBucket} win=${win}`)
+    res.json({ ok: true, linked: true, decision_id: decision.id, win, bucket: effectiveBucket })
   } catch (e) {
     console.error('[Argus] Feedback error:', e.message)
     res.status(500).json({ error: e.message })

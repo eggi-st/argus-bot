@@ -30,17 +30,28 @@ const UPSERT = `
     active       = CASE WHEN sample_count + 1 >= ${PROMOTION_THRESHOLD} THEN 1 ELSE active END
 `
 
-function updatePattern(positionId, { netPnlPct, strategy, win }) {
+function resolveConditionBucket(positionId, source, conditionBucketOverride) {
+  if (conditionBucketOverride) return conditionBucketOverride
+  if (!positionId) return null
+  if (source === 'meridian_feedback') {
+    // positionId is decisions.id for Meridian-sourced outcomes
+    const row = db.prepare(`SELECT condition_bucket FROM decisions WHERE id = ?`).get(positionId)
+    return row?.condition_bucket ?? null
+  }
   const row = db.prepare(`
     SELECT d.condition_bucket
     FROM dry_run_positions dr
     JOIN decisions d ON d.id = dr.decision_id
     WHERE dr.id = ?
   `).get(positionId)
+  return row?.condition_bucket ?? null
+}
 
-  if (!row?.condition_bucket) return
+function updatePattern(positionId, { netPnlPct, strategy, win, source, conditionBucketOverride }) {
+  const bucket = resolveConditionBucket(positionId, source, conditionBucketOverride)
+  if (!bucket) return
 
-  const { volatility_bucket, regime } = parseBucket(row.condition_bucket)
+  const { volatility_bucket, regime } = parseBucket(bucket)
   const winVal = win ? 1.0 : 0.0
   const now    = new Date().toISOString()
 
@@ -55,12 +66,14 @@ function updatePattern(positionId, { netPnlPct, strategy, win }) {
 
 function init() {
   bus.onSlow('outcome_recorded', payload => {
-    if (!payload?.position_id) return
+    if (!payload?.position_id && !payload?.condition_bucket) return
     try {
       updatePattern(payload.position_id, {
-        netPnlPct: payload.net_pnl_pct ?? 0,
-        strategy:  payload.strategy,
-        win:       !!payload.win,
+        netPnlPct:              payload.net_pnl_pct ?? 0,
+        strategy:               payload.strategy,
+        win:                    !!payload.win,
+        source:                 payload.source,
+        conditionBucketOverride: payload.condition_bucket ?? null,
       })
     } catch (e) {
       console.error('[Pattern] Update error:', e.message)
