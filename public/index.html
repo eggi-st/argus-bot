@@ -409,13 +409,37 @@
 
   <!-- ── Log ────────────────────────────────────────────────────────────────── -->
   <div class="page" id="page-log">
+
+    <!-- Meridian Feedback History -->
+    <div class="stat-row stat-row-3" style="margin-bottom:16px" id="fb-stats-row">
+      <div class="stat-card s-purple">
+        <div class="stat-label">Outcomes dari Meridian</div>
+        <div class="stat-value" id="fb-total">—</div>
+        <div class="stat-sub" id="fb-wr">—</div>
+      </div>
+      <div class="stat-card s-green">
+        <div class="stat-label">Avg P&L (real)</div>
+        <div class="stat-value" id="fb-avg">—</div>
+        <div class="stat-sub">net dari eksekusi nyata</div>
+      </div>
+      <div class="stat-card s-indigo">
+        <div class="stat-label">Total P&L kumulatif</div>
+        <div class="stat-value" id="fb-sum">—</div>
+        <div class="stat-sub">semua outcome Meridian</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Meridian Outcomes <span id="fb-count-label"></span></div>
+      <div id="fb-table" class="empty">Menunggu outcome pertama dari Meridian…</div>
+    </div>
+
     <div class="card">
       <div class="card-title">Rejection Log <span id="rej-summary"></span></div>
       <div id="rej-table" class="empty">Menunggu scan pertama…</div>
     </div>
     <div class="card">
       <div class="card-title">Live Events (semua)</div>
-      <div id="log-full" style="font-size:12px;max-height:500px;overflow-y:auto"></div>
+      <div id="log-full" style="font-size:12px;max-height:400px;overflow-y:auto"></div>
     </div>
   </div>
 
@@ -472,7 +496,7 @@ const PAGE_LOADERS = {
   patterns: () => loadPatternLibrary(),
   hivemind: () => loadHivemind(),
   wallet:   () => loadWalletActions(),
-  log:      () => loadRejections(),
+  log:      () => { loadRejections(); loadFeedbackHistory() },
 }
 function switchPage(id) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'))
@@ -829,6 +853,74 @@ function loadWalletActions() {
   }).catch(() => {})
 }
 
+// ── Feedback History (Meridian real outcomes) ──────────────────────────────────
+function loadFeedbackHistory() {
+  apiFetch('/api/feedback/history?limit=40').then(r => r.json()).then(d => {
+    const s = d.stats || {}
+    const total = s.total ?? 0
+    const wins  = s.wins  ?? 0
+    const wr    = total > 0 ? Math.round((wins / total) * 100) : null
+    const avg   = s.avg_pnl != null ? Math.round(s.avg_pnl * 100) / 100 : null
+    const sum   = s.total_pnl != null ? Math.round(s.total_pnl * 100) / 100 : null
+
+    el('fb-total', total || '—')
+    el('fb-wr', total ? `${wins}W / ${total - wins}L` : '—')
+    const avgEl = document.getElementById('fb-avg')
+    if (avgEl) {
+      avgEl.textContent = avg != null ? (avg >= 0 ? '+' : '') + avg + '%' : '—'
+      avgEl.style.color = avg > 0 ? 'var(--green)' : avg < 0 ? 'var(--red)' : ''
+    }
+    const sumEl = document.getElementById('fb-sum')
+    if (sumEl) {
+      sumEl.textContent = sum != null ? (sum >= 0 ? '+' : '') + sum + '%' : '—'
+      sumEl.style.color = sum > 0 ? 'var(--green)' : sum < 0 ? 'var(--red)' : ''
+    }
+
+    const label = document.getElementById('fb-count-label')
+    if (label) label.textContent = total ? `${total} records` : ''
+
+    const tbl = document.getElementById('fb-table')
+    const outcomes = d.outcomes || []
+    if (!outcomes.length) {
+      tbl.innerHTML = '<div class="empty">Menunggu outcome pertama dari Meridian…</div>'
+      return
+    }
+    const COLS = '50px 90px 85px 75px 70px 130px 1fr'
+    const header = `<div class="tbl-head" style="grid-template-columns:${COLS}">
+      <span>Waktu</span><span>Token</span><span>Strategy</span>
+      <span>P&L Real</span><span>Win?</span><span>Bucket</span><span>Pool</span>
+    </div>`
+    const rows = outcomes.map(o => {
+      const ts = new Date(o.created_at).toLocaleString('id-ID', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})
+      const dexUrl = o.token_mint ? `https://dexscreener.com/solana/${o.token_mint}` : null
+      const tok = dexUrl
+        ? `<a href="${dexUrl}" target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">${o.token_symbol||'?'}</a>`
+        : `<b>${o.token_symbol||'?'}</b>`
+      const pnl = o.outcome_pnl_pct
+      const pnlEl = pnl != null
+        ? `<span style="font-weight:700;color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%</span>`
+        : '—'
+      const winEl = o.win === 1
+        ? `<span class="badge badge-green">W</span>`
+        : `<span class="badge badge-red">L</span>`
+      const bucket = (o.condition_bucket || '').replace(/_/g, ' ') || '—'
+      const pool = o.pool_address
+        ? `<a href="https://app.meteora.ag/dlmm/${o.pool_address}" target="_blank" style="color:var(--muted);font-size:10px;text-decoration:none">${o.pool_address.slice(0,10)}…</a>`
+        : '—'
+      return `<div class="tbl-row" style="grid-template-columns:${COLS}">
+        <span style="color:var(--muted);font-size:11px">${ts}</span>
+        ${tok}
+        <span><span class="badge ${STRAT_BADGE[o.strategy]||'badge-gray'}">${STRAT_LABEL[o.strategy]||o.strategy}</span></span>
+        ${pnlEl}
+        ${winEl}
+        <span style="color:var(--muted2);font-size:11px">${bucket}</span>
+        ${pool}
+      </div>`
+    }).join('')
+    tbl.innerHTML = header + rows
+  }).catch(() => {})
+}
+
 // ── Rejection Log ──────────────────────────────────────────────────────────────
 function loadRejections() {
   apiFetch('/api/screening-rejections?limit=40').then(r => r.json()).then(d => {
@@ -891,6 +983,9 @@ function connect() {
       if (msg.type === 'scan_result' || msg.type === 'scan_complete' || msg.type === 'recommendation_expired') {
         loadDecisions(); loadDryRunSummary(); loadRejections()
         if (document.getElementById('page-dryrun').classList.contains('active')) loadDryRun()
+      }
+      if (msg.type === 'verdict_ready') {
+        loadDecisions()
       }
       if (msg.type === 'dry_run_closed' || msg.type === 'outcome_recorded') {
         loadDryRunSummary()

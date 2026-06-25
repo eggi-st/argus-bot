@@ -402,6 +402,33 @@ app.get('/api/screening-rejections', (req, res) => {
   }
 })
 
+// ── Meridian Feedback History ─────────────────────────────────────────────────
+// Show decisions that Meridian actually followed + outcomes received
+app.get('/api/feedback/history', (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit || '40', 10), 200)
+    const rows = db.prepare(`
+      SELECT id, created_at, token_symbol, token_mint, pool_address,
+             strategy, condition_bucket, confidence,
+             outcome_pnl_pct, outcome_known, win,
+             status, followed
+      FROM decisions
+      WHERE outcome_known = 1
+      ORDER BY created_at DESC LIMIT ?
+    `).all(limit)
+    const stats = db.prepare(`
+      SELECT COUNT(*) AS total,
+             SUM(CASE WHEN win = 1 THEN 1 ELSE 0 END) AS wins,
+             AVG(outcome_pnl_pct) AS avg_pnl,
+             SUM(outcome_pnl_pct) AS total_pnl
+      FROM decisions WHERE outcome_known = 1
+    `).get()
+    res.json({ outcomes: rows, stats })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
 let wss
