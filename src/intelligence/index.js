@@ -180,6 +180,23 @@ async function runScan() {
           generateVerdict(decisionId, pool, best.strategy, bucket, indicators, cfg.ai)
         }
 
+        // Meridian integration — push signal via webhook (fire-and-forget)
+        if (cfg.meridian?.enabled && cfg.meridian?.webhookUrl) {
+          const meridian = require('../meridian/index')
+          meridian.pushRecommendation({
+            decision_id:          decisionId,
+            token_symbol:         pool.base?.symbol,
+            token_mint:           pool.base?.mint,
+            pool_address:         pool.pool,
+            strategy:             best.strategy,
+            confidence:           confidence,
+            expires_at:           expiresAt,
+            condition_bucket:     bucket,
+            smart_money_confirmed: smartMoneyConfirmed,
+            pool_url:             `https://app.meteora.ag/dlmm/${pool.pool}`,
+          }).catch(() => {})
+        }
+
         const elig = allScores.filter(s => s.eligible).map(s => s.strategy).join('/')
         const patStr = pattern?.active ? ` [hist ${(pattern.win_rate*100).toFixed(0)}%/${pattern.sample_count}]` : ''
         console.log(`[IC] #${decisionId} ${pool.base?.symbol} → ${best.strategy} (conf=${(confidence*100).toFixed(0)}, ttl=${ttlMinutes}m, elig: ${elig || 'none'}${patStr})`)

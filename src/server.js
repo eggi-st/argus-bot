@@ -123,6 +123,37 @@ app.get('/api/pattern-library', (req, res) => {
   }
 })
 
+// ── Meridian Integration API ──────────────────────────────────────────────────
+
+app.get('/api/meridian/recommendations', (req, res) => {
+  try {
+    const meridian = require('./meridian/index')
+    res.json({ recommendations: meridian.getActiveRecommendations() })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get('/api/meridian/pool/:address/signal', (req, res) => {
+  try {
+    const meridian = require('./meridian/index')
+    res.json(meridian.getPoolSignal(req.params.address))
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get('/api/meridian/smart-wallets', (req, res) => {
+  try {
+    const meridian = require('./meridian/index')
+    res.json(meridian.getSmartWalletsForMeridian())
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post('/api/meridian/webhook/test', async (req, res) => {
+  try {
+    const meridian = require('./meridian/index')
+    await meridian.pushRecommendation({ token_symbol: 'TEST', strategy: 'spot', confidence: 1.0, test: true })
+    res.json({ ok: true, message: 'Test payload sent to meridian.webhookUrl' })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // ── Hivemind Discovery API ────────────────────────────────────────────────────
 
 app.get('/api/hivemind', (req, res) => {

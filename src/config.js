@@ -80,6 +80,17 @@ const DEFAULTS = {
     // If set, becomes Source C in the fallback chain (after Meteora sources).
     apiKey: null,
   },
+  meridian: {
+    // Meridian bot integration — feed Argus signals to Meridian for LP execution.
+    // enabled: set true to activate webhook push on new recommendations.
+    // webhookUrl: Meridian's incoming webhook endpoint (set in Meridian user-config.json).
+    // argusUrl: public URL of this Argus instance — used by Meridian to poll signals.
+    // smartWalletSync: if true, Meridian can import Argus smart wallets automatically.
+    enabled: false,
+    webhookUrl: null,
+    argusUrl: null,
+    smartWalletSync: false,
+  },
   ai: {
     // LLM verdict generation via OpenAI-compatible endpoint.
     // Compatible with SumoPod, Ollama (default), LM Studio, etc.
