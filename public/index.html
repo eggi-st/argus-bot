@@ -32,7 +32,7 @@
     #status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
     #status-dot.online { background: var(--green); }
     #status-dot.offline { background: var(--red); }
-    main { padding: 24px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    main { padding: 24px; display: grid; gap: 16px; grid-template-columns: repeat(3, 1fr); }
     .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
     .card h2 { font-size: 11px; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; margin-bottom: 12px; }
     .metric { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
@@ -92,22 +92,10 @@
   <header>
     <div id="status-dot"></div>
     <img src="/logo.png" alt="Argus" style="width:28px;height:28px;object-fit:contain;"/>
-    <h1>ARGUS <span>v0.4.0 — Phase 0</span></h1>
+    <h1>ARGUS <span>v0.4.0</span></h1>
     <div style="margin-left:auto; color: var(--muted); font-size: 12px;" id="ts">—</div>
   </header>
   <main>
-    <div class="phase-banner">
-      <h2>Build Progress</h2>
-      <p style="color:var(--muted); font-size:13px;">Fase 0 selesai. Intelligence Core dan Dry Run Engine menyusul.</p>
-      <div class="phase-list">
-        <span class="phase-item done">✓ Phase 0 — Foundation</span>
-        <span class="phase-item done">✓ Phase 1 — Intelligence Core</span>
-        <span class="phase-item done">✓ Phase 2 — Dry Run Engine</span>
-        <span class="phase-item done">✓ Phase 3 — Wallet Observer</span>
-        <span class="phase-item done">✓ Phase 4 — AI + Learning</span>
-      </div>
-    </div>
-
     <div class="card">
       <h2>System Status</h2>
       <div class="metric"><span class="metric-label">Connection</span><span id="conn-status" class="pill muted">Connecting…</span></div>
@@ -256,9 +244,33 @@
 
     const STRATEGY_COLOR = { spot: 'green', bid_ask: 'yellow', limit_order: 'blue' }
 
+    function formatEvent(msg) {
+      try {
+        const m = typeof msg === 'string' ? JSON.parse(msg) : msg
+        const t = m.type
+        if (t === 'init') return `WebSocket connected · CB ${m.risk?.circuit_breaker_open ? 'OPEN' : 'clear'} · ${m.risk?.current_open_count ?? 0} posisi`
+        if (t === 'risk_update') return `Risk update · CB ${m.risk?.circuit_breaker_open ? 'OPEN' : 'clear'}`
+        if (t === 'scan_complete' || t === 'scan_result') return `Scan selesai · ${m.decisions ?? '?'} decisions dari ${m.candidates ?? '?'} kandidat (${m.elapsed_ms ?? '?'}ms)`
+        if (t === 'scan_error') return `Scan error · ${m.error}`
+        if (t === 'recommendation_expired') return `Decision expired · ${m.token_symbol || m.pool_address?.slice(0,8)}`
+        if (t === 'risk_gate_blocked') return `Risk gate blocked · ${m.reason || '—'}`
+        if (t === 'wallet_action_detected') return `Wallet action · ${m.action_type} ${m.token_symbol || ''}`
+        if (t === 'tracked_wallets_updated') return `Hivemind · ${m.discovered ?? '?'} wallet baru ditemukan`
+        if (t === 'outcome_recorded') return `Outcome · ${m.strategy} pnl=${m.net_pnl_pct?.toFixed?.(2) ?? '?'}% win=${m.win}`
+        if (t === 'dry_run_closed') return `Dry run closed · ${m.token_symbol || ''} ${m.net_pnl_pct != null ? (m.net_pnl_pct >= 0 ? '+' : '') + m.net_pnl_pct.toFixed(2) + '%' : ''}`
+        if (t === 'argus_signal') return `Argus signal · ${m.signal?.token_symbol || ''} ${m.signal?.recommended ? '✓' : '✗'}`
+        if (t === 'pong') return null
+        return `${t}${m.token_symbol ? ' · ' + m.token_symbol : ''}`
+      } catch {
+        return msg
+      }
+    }
+
     function addLog(msg) {
       const t = new Date().toLocaleTimeString('id-ID')
-      lines.unshift(`[${t}] ${msg}`)
+      const label = formatEvent(msg)
+      if (label === null) return
+      lines.unshift(`[${t}] ${label}`)
       if (lines.length > 40) lines.pop()
       logEl.textContent = lines.join('\n')
     }
@@ -331,11 +343,11 @@
         }
         const rows = d.decisions.map(dec => {
           const ind = dec.indicators || {}
-          const athStr = ind.price_vs_ath_pct != null ? `${ind.price_vs_ath_pct}% ATH` : '—'
-          const volStr = ind.volatility != null ? `vol ${ind.volatility}` : '—'
+          const volStr = ind.volatility != null ? `vol ${parseFloat(ind.volatility).toFixed(2)}` : '—'
           const feeTvlStr = ind.fee_active_tvl_ratio != null ? `${(ind.fee_active_tvl_ratio*100).toFixed(1)}% fee/tvl` : '—'
+          const condLabel = (dec.condition_bucket || '').replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase())
           const color = STRATEGY_COLOR[dec.strategy] || 'muted'
-          const pct = Math.round((dec.confidence || 0) * 100)
+          const pct = Math.min(100, Math.round((dec.confidence || 0) * 100))
           const exp = new Date(dec.expires_at).toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' })
           const dexLink = dec.token_mint
             ? `<a href="https://dexscreener.com/solana/${dec.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none;" title="DexScreener">${dec.token_symbol || dec.token_mint.slice(0,8)}</a>`
@@ -343,15 +355,15 @@
           const verdictHtml = dec.llm_verdict
             ? `<div id="verdict-${dec.id}" style="font-size:11px;color:var(--muted);padding:3px 0 6px;border-bottom:1px solid var(--border);font-style:italic">${dec.llm_verdict}</div>`
             : `<div id="verdict-${dec.id}"></div>`
-          return `<div style="display:grid;grid-template-columns:100px 100px 120px 1fr 60px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);">` +
+          return `<div style="display:grid;grid-template-columns:100px 90px 80px 1fr 60px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);">` +
             `<span>${dexLink}</span>` +
-            `<span><span class="pill ${color}">${dec.strategy}</span> <span style="font-size:10px;color:var(--muted)">${pct}%</span></span>` +
-            `<span style="color:var(--muted)">${athStr} · ${volStr}</span>` +
-            `<span style="color:var(--muted);font-size:11px">${feeTvlStr} · ${dec.condition_bucket || ''}</span>` +
+            `<span><span class="pill ${color}">${dec.strategy}</span></span>` +
+            `<span style="color:var(--muted)">${volStr}</span>` +
+            `<span style="color:var(--muted);font-size:11px">${feeTvlStr} · ${condLabel}</span>` +
             `<span style="color:var(--muted);font-size:11px;text-align:right">exp ${exp}</span>` +
             `</div>` + verdictHtml
         }).join('')
-        el.innerHTML = `<div style="display:grid;grid-template-columns:100px 100px 120px 1fr 60px;gap:8px;padding:0 0 6px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Token</span><span>Strategy</span><span>Key Signals</span><span>Condition</span><span style="text-align:right">Expires</span></div>${rows}`
+        el.innerHTML = `<div style="display:grid;grid-template-columns:100px 90px 80px 1fr 60px;gap:8px;padding:0 0 6px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Token</span><span>Strategy</span><span>Vol</span><span>Condition</span><span style="text-align:right">Expires</span></div>${rows}`
       }).catch(() => {})
     }
 
@@ -577,14 +589,7 @@
           else loadDecisions()
         }
         if (msg.type === 'outcome_recorded') loadPatternLibrary()
-        if (msg.type !== 'pong') {
-          const summary = msg.type === 'scan_result'
-            ? `scan_result: ${msg.decisions} decisions from ${msg.candidates} candidates (${msg.elapsed_ms}ms)`
-            : msg.type === 'scan_error'
-            ? `scan_error: ${msg.error}`
-            : JSON.stringify(msg)
-          addLog(summary)
-        }
+        addLog(msg)
       }
       ws.onclose = () => {
         dot.className = 'offline'
