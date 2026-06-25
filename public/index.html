@@ -44,9 +44,42 @@
     .phase-item.next { background: rgba(245,158,11,.1); color: var(--yellow); border: 1px solid rgba(245,158,11,.2); }
     .phase-item.pending { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
     #log { font-size: 12px; font-family: monospace; color: var(--muted); line-height: 1.8; }
+  #login-overlay {
+    position: fixed; inset: 0; background: var(--bg); display: flex;
+    align-items: center; justify-content: center; z-index: 9999;
+  }
+  #login-overlay.hidden { display: none; }
+  #login-box {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 40px 48px; width: 340px; text-align: center;
+  }
+  #login-box h2 { font-size: 20px; letter-spacing: 2px; margin-bottom: 8px; }
+  #login-box p { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  #login-box input {
+    width: 100%; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 14px; margin-bottom: 12px; outline: none;
+  }
+  #login-box input:focus { border-color: var(--blue); }
+  #login-box button {
+    width: 100%; padding: 10px; background: var(--blue); border: none; border-radius: 6px;
+    color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  #login-box button:hover { opacity: 0.85; }
+  #login-error { color: var(--red); font-size: 12px; margin-top: 10px; min-height: 18px; }
   </style>
 </head>
 <body>
+
+  <div id="login-overlay">
+    <div id="login-box">
+      <h2>🦅 ARGUS</h2>
+      <p>Masukkan password untuk mengakses dashboard</p>
+      <input type="password" id="login-pw" placeholder="Password" autofocus/>
+      <button id="login-btn" onclick="doLogin()">Masuk</button>
+      <div id="login-error"></div>
+    </div>
+  </div>
+
   <header>
     <div id="status-dot"></div>
     <h1>🦅 ARGUS <span>v0.4.0 — Phase 0</span></h1>
@@ -147,6 +180,66 @@
   </main>
 
   <script>
+    // ── Auth ──────────────────────────────────────────────────────────────────
+    let TOKEN = sessionStorage.getItem('argus_token')
+
+    function apiFetch(url, opts = {}) {
+      const headers = { ...(opts.headers || {}) }
+      if (TOKEN) headers['x-auth-token'] = TOKEN
+      return fetch(url, { ...opts, headers })
+    }
+
+    async function doLogin() {
+      const pw = document.getElementById('login-pw').value
+      const btn = document.getElementById('login-btn')
+      const err = document.getElementById('login-error')
+      if (!pw) return
+      btn.disabled = true
+      btn.textContent = 'Memverifikasi…'
+      try {
+        const res = await apiFetch('/api/auth', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pw })
+        })
+        const data = await res.json()
+        if (data.ok) {
+          TOKEN = data.token
+          if (TOKEN) sessionStorage.setItem('argus_token', TOKEN)
+          document.getElementById('login-overlay').classList.add('hidden')
+          initApp()
+        } else {
+          err.textContent = data.error || 'Password salah'
+          btn.disabled = false
+          btn.textContent = 'Masuk'
+        }
+      } catch (e) {
+        err.textContent = 'Gagal terhubung ke server'
+        btn.disabled = false
+        btn.textContent = 'Masuk'
+      }
+    }
+
+    document.getElementById('login-pw').addEventListener('keydown', e => {
+      if (e.key === 'Enter') doLogin()
+    })
+
+    async function checkAuth() {
+      try {
+        const res = await apiFetch('/api/health')
+        if (res.status === 401) {
+          TOKEN = null; sessionStorage.removeItem('argus_token')
+          return // stay on login screen
+        }
+        document.getElementById('login-overlay').classList.add('hidden')
+        initApp()
+      } catch {
+        // Server unreachable — still show app (offline state)
+        document.getElementById('login-overlay').classList.add('hidden')
+        initApp()
+      }
+    }
+
+    // ── App ───────────────────────────────────────────────────────────────────
     const logEl = document.getElementById('log')
     const dot = document.getElementById('status-dot')
     let ws, lines = []
@@ -179,11 +272,11 @@
     }
 
     function refreshRisk() {
-      fetch('/api/risk').then(r => r.json()).then(updateRisk).catch(() => {})
+      apiFetch('/api/risk').then(r => r.json()).then(updateRisk).catch(() => {})
     }
 
     function loadDryRun() {
-      fetch('/api/dry-run?limit=15').then(r => r.json()).then(d => {
+      apiFetch('/api/dry-run?limit=15').then(r => r.json()).then(d => {
         const s = d.stats || {}
         document.getElementById('dr-open').textContent = s.open_positions ?? '0'
         document.getElementById('dr-closed').textContent = s.total_closed ?? '0'
@@ -220,7 +313,7 @@
     }
 
     function loadDecisions() {
-      fetch('/api/candidates?limit=20&status=active').then(r => r.json()).then(d => {
+      apiFetch('/api/candidates?limit=20&status=active').then(r => r.json()).then(d => {
         const el = document.getElementById('decisions-table')
         if (!d.decisions || d.decisions.length === 0) {
           el.textContent = 'No active decisions — trigger a scan or wait for next cycle (every 15min).'
@@ -253,7 +346,7 @@
     }
 
     function loadPatternLibrary() {
-      fetch('/api/pattern-library').then(r => r.json()).then(d => {
+      apiFetch('/api/pattern-library').then(r => r.json()).then(d => {
         const patterns = d.patterns || []
         const active   = patterns.filter(p => p.active)
         const total    = patterns.reduce((s, p) => s + (p.sample_count || 0), 0)
@@ -302,7 +395,7 @@
     }
 
     function loadWalletActions() {
-      fetch('/api/wallet-actions?limit=20').then(r => r.json()).then(d => {
+      apiFetch('/api/wallet-actions?limit=20').then(r => r.json()).then(d => {
         const st = d.status || {}
         const woEl = document.getElementById('wo-status')
         woEl.textContent = st.active ? 'Active' : 'Inactive'
@@ -364,7 +457,7 @@
     }
 
     function loadHivemind() {
-      fetch('/api/hivemind').then(r => r.json()).then(d => {
+      apiFetch('/api/hivemind').then(r => r.json()).then(d => {
         document.getElementById('hv-count').textContent = d.wallet_count ?? '—'
 
         const STATE_STYLE = {
@@ -391,7 +484,7 @@
         document.getElementById('hv-sources').innerHTML = sourcesHtml || '<span style="color:var(--muted)">No sources configured</span>'
       }).catch(() => {})
 
-      fetch('/api/hivemind/wallets').then(r => r.json()).then(d => {
+      apiFetch('/api/hivemind/wallets').then(r => r.json()).then(d => {
         const el = document.getElementById('hv-table')
         if (!d.wallets?.length) return
         const rows = d.wallets.map(w => {
@@ -414,7 +507,7 @@
     }
 
     function runHivemind() {
-      fetch('/api/hivemind/run', { method: 'POST' })
+      apiFetch('/api/hivemind/run', { method: 'POST' })
         .then(r => r.json())
         .then(() => { addLog('Hivemind discovery started — check logs'); setTimeout(loadHivemind, 5000) })
         .catch(e => addLog('Hivemind run failed: ' + e.message))
@@ -434,7 +527,7 @@
       const btn = document.getElementById('scan-btn')
       btn.textContent = '⏳ Scanning…'
       btn.disabled = true
-      fetch('/api/scan/run', { method: 'POST' })
+      apiFetch('/api/scan/run', { method: 'POST' })
         .then(r => r.json())
         .then(d => addLog('Manual scan triggered — results via WebSocket'))
         .catch(e => addLog('Scan trigger failed: ' + e.message))
@@ -442,13 +535,14 @@
     }
 
     function connect() {
-      ws = new WebSocket(`ws://127.0.0.1:${location.port || 4000}`)
+      const tokenParam = TOKEN ? `?token=${TOKEN}` : ''
+      ws = new WebSocket(`ws://${location.host}${tokenParam}`)
       ws.onopen = () => {
         dot.className = 'online'
         document.getElementById('conn-status').textContent = 'Connected'
         document.getElementById('conn-status').className = 'pill green'
         addLog('WebSocket connected')
-        fetch('/api/health').then(r => r.json()).then(d => {
+        apiFetch('/api/health').then(r => r.json()).then(d => {
           document.getElementById('uptime').textContent = Math.floor(d.uptime) + 's'
           document.getElementById('sched-status').textContent = d.scheduler.length + ' jobs'
           document.getElementById('ts').textContent = new Date(d.ts).toLocaleString('id-ID')
@@ -491,8 +585,12 @@
       }
     }
 
-    setInterval(() => ws?.readyState === 1 && ws.send(JSON.stringify({ type: 'ping' })), 30000)
-    connect()
+    function initApp() {
+      setInterval(() => ws?.readyState === 1 && ws.send(JSON.stringify({ type: 'ping' })), 30000)
+      connect()
+    }
+
+    checkAuth()
   </script>
 </body>
 </html>

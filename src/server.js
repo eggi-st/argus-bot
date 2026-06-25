@@ -3,6 +3,7 @@ const express = require('express')
 const { WebSocketServer } = require('ws')
 const http = require('http')
 const path = require('path')
+const crypto = require('crypto')
 const bus = require('./core/event-bus')
 const riskState = require('./core/risk-state')
 const scheduler = require('./core/scheduler')
@@ -10,14 +11,82 @@ const scheduler = require('./core/scheduler')
 const app = express()
 const PORT = parseInt(process.env.PORT || '4000')
 const HOST = process.env.HOST || '127.0.0.1'
+const WEB_PASSWORD = process.env.WEB_PASSWORD || ''
+const AUTH_TOKEN = WEB_PASSWORD
+  ? crypto.createHash('sha256').update(WEB_PASSWORD + 'argus').digest('hex').slice(0, 32)
+  : null
+
+if (!WEB_PASSWORD) console.warn('[WEB] WARNING: WEB_PASSWORD not set — dashboard is open to anyone!')
+
+// ── Brute force protection ────────────────────────────────────────────────────
+const LOGIN_ATTEMPTS = new Map()
+const MAX_LOGIN_ATTEMPTS = 5
+const LOGIN_LOCK_DURATION = 15 * 60 * 1000
+
+function getLoginState(ip) {
+  if (!LOGIN_ATTEMPTS.has(ip)) LOGIN_ATTEMPTS.set(ip, { count: 0, lockUntil: 0 })
+  return LOGIN_ATTEMPTS.get(ip)
+}
+
+// ── Rate limiting (120 req/min per IP) ───────────────────────────────────────
+const RATE_LIMIT_WINDOW = 60 * 1000
+const RATE_LIMIT_MAX = 120
+const rateLimitMap = new Map()
+
+function rateLimiter(req, res, next) {
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown'
+  const now = Date.now()
+  let entry = rateLimitMap.get(ip)
+  if (!entry || now - entry.start > RATE_LIMIT_WINDOW) entry = { count: 1, start: now }
+  else entry.count++
+  rateLimitMap.set(ip, entry)
+  if (entry.count > RATE_LIMIT_MAX) return res.status(429).json({ ok: false, error: 'Too many requests' })
+  next()
+}
+
+// ── Auth middleware ───────────────────────────────────────────────────────────
+function authMiddleware(req, res, next) {
+  if (!AUTH_TOKEN) return next()
+  const token = req.headers['x-auth-token'] || req.query.token
+  if (token === AUTH_TOKEN) return next()
+  res.status(401).json({ ok: false, error: 'Unauthorized' })
+}
 
 app.use(express.json())
+app.use(rateLimiter)
 app.use(express.static(path.join(__dirname, '../public')))
 
 // ── API Routes ────────────────────────────────────────────────────────────────
 
 const { version } = require('../package.json')
 const db = require('./db/database')
+
+// ── Auth endpoint (public — no authMiddleware) ────────────────────────────────
+app.post('/api/auth', (req, res) => {
+  if (!WEB_PASSWORD) return res.json({ ok: true, token: null })
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown'
+  const state = getLoginState(ip)
+  if (state.lockUntil > Date.now()) {
+    const minsLeft = Math.ceil((state.lockUntil - Date.now()) / 60000)
+    return res.status(429).json({ ok: false, error: `Terlalu banyak percobaan. Coba lagi dalam ${minsLeft} menit.` })
+  }
+  if (req.body?.password === WEB_PASSWORD) {
+    LOGIN_ATTEMPTS.delete(ip)
+    return res.json({ ok: true, token: AUTH_TOKEN })
+  }
+  state.count++
+  if (state.count >= MAX_LOGIN_ATTEMPTS) {
+    state.lockUntil = Date.now() + LOGIN_LOCK_DURATION
+    state.count = 0
+    console.warn(`[WEB] Brute force dari ${ip} — IP dikunci 15 menit`)
+    return res.status(429).json({ ok: false, error: 'Terlalu banyak percobaan. IP dikunci selama 15 menit.' })
+  }
+  const sisa = MAX_LOGIN_ATTEMPTS - state.count
+  return res.status(401).json({ ok: false, error: `Password salah (${sisa} percobaan tersisa)` })
+})
+
+// ── All /api/* routes below require auth ──────────────────────────────────────
+app.use('/api', authMiddleware)
 
 app.get('/api/health', (req, res) => {
   res.json({
@@ -287,7 +356,12 @@ function broadcast(payload) {
 function setupWebSocket(server) {
   wss = new WebSocketServer({ server })
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
+    if (AUTH_TOKEN) {
+      const url = new URL(req.url, 'http://localhost')
+      const token = url.searchParams.get('token')
+      if (token !== AUTH_TOKEN) { ws.close(4401, 'Unauthorized'); return }
+    }
     clients.add(ws)
     // Send current state on connect
     ws.send(JSON.stringify({ type: 'init', risk: riskState.state, ts: Date.now() }))
