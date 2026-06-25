@@ -106,6 +106,18 @@ function start(wallets, rpcUrl, intervalMs) {
   }, 5000)
 }
 
+/**
+ * Dynamically add a newly discovered wallet without restarting the observer.
+ * Cursor will be initialized on the next poll cycle.
+ */
+function addWallet(wallet) {
+  if (!_timer) return  // observer not running
+  if (_wallets.some(w => w.address === wallet.address)) return  // already tracked
+  _wallets.push(wallet)
+  const icon = wallet.type === 'smart_money' ? '🐋' : '👤'
+  console.log(`[Wallet] ${icon} Hot-added: ${wallet.label} (${wallet.address.slice(0, 8)}…)`)
+}
+
 function stop() {
   if (_timer) { clearInterval(_timer); _timer = null }
 }
@@ -122,4 +134,4 @@ function getStatus() {
   }
 }
 
-module.exports = { start, stop, getStatus, pollWallet }
+module.exports = { start, stop, getStatus, pollWallet, addWallet }

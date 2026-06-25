@@ -114,6 +114,37 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_pattern_active    ON pattern_library(active);
   `)
 
+  db.exec(`
+    -- ── tracked_wallets ────────────────────────────────────────────────────────
+    -- Dynamic smart money wallets discovered by Hivemind Discovery system.
+    -- Separate from user-config.json static list — auto-populated by sources.
+    CREATE TABLE IF NOT EXISTS tracked_wallets (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      discovered_at TEXT    NOT NULL,
+      address       TEXT    UNIQUE NOT NULL,
+      label         TEXT,
+      source        TEXT    NOT NULL,
+      active        INTEGER DEFAULT 1,
+      pool_hits     INTEGER DEFAULT 1,
+      last_seen     TEXT
+    );
+
+    -- ── discovery_sources ──────────────────────────────────────────────────────
+    -- Per-source state machine: cooldown, failure tracking, pause.
+    -- failure_count resets to 0 on success. cooldown doubles on each failure (max 24h).
+    -- paused_until is set when failure_count >= 5 (auto-pause for 24h).
+    CREATE TABLE IF NOT EXISTS discovery_sources (
+      source        TEXT    PRIMARY KEY,
+      last_run      TEXT,
+      cooldown_ms   INTEGER DEFAULT 21600000,
+      failure_count INTEGER DEFAULT 0,
+      paused_until  TEXT,
+      last_error    TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tracked_wallets_active ON tracked_wallets(active);
+  `)
+
   migrateSchema()
   console.log('[Schema] ✓ Database schema ready')
 }

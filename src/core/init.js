@@ -48,10 +48,15 @@ async function init() {
   wallet.init()
   console.log('✓')
 
-  // ── Layer 4: Learning + AI ───────────────────────────────────────────────
+  // ── Layer 4: Learning + AI + Hivemind ───────────────────────────────────
   process.stdout.write('[Init] Layer 4 · Pattern Library... ')
   const learning = require('../learning/index')
   learning.init()
+  console.log('✓')
+
+  process.stdout.write('[Init] Layer 4 · Hivemind Discovery... ')
+  const hivemind = require('../wallet/hivemind-discovery')
+  hivemind.init()
   console.log('✓')
 
   // ── Layer 5: Notifications + Web Server ──────────────────────────────────

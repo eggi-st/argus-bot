@@ -37,6 +37,16 @@ function start() {
     bus.emitSafe('dry_run_update', { trigger: 'scheduled', ts: Date.now() })
   })
 
+  // ── Hivemind discovery: every 6 hours ────────────────────────────────────
+  // Scans Meteora on-chain (+ fallback sources) for new smart money wallets.
+  // Sources manage their own cooldown/backoff internally.
+  schedule('hivemind', '0 */6 * * *', () => {
+    const hivemind = require('../wallet/hivemind-discovery')
+    hivemind.runDiscovery().catch(e =>
+      console.error('[Hivemind] Discovery error:', e.message)
+    )
+  })
+
   // ── Daily reset: midnight ─────────────────────────────────────────────────
   schedule('daily-reset', '0 0 * * *', () => {
     require('./risk-state')._resetIfNewDay()

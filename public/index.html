@@ -90,6 +90,14 @@
     </div>
 
     <div class="card">
+      <h2>Hivemind Discovery
+        <button onclick="runHivemind()" style="float:right;background:rgba(255,200,0,.15);color:#f0b429;border:1px solid #f0b429;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:10px;">▶ Run Now</button>
+      </h2>
+      <div class="metric"><span class="metric-label">Smart Wallets</span><span class="metric-value" id="hv-count">—</span></div>
+      <div id="hv-sources" style="margin-top:8px;font-size:11px;"></div>
+    </div>
+
+    <div class="card">
       <h2>Pattern Library</h2>
       <div class="metric"><span class="metric-label">Active patterns</span><span class="metric-value" id="pl-active">—</span></div>
       <div class="metric"><span class="metric-label">Total samples</span><span class="metric-value" id="pl-samples">—</span></div>
@@ -120,6 +128,11 @@
     <div class="card" style="grid-column:1/-1;">
       <h2>Pattern Library <span id="pl-status" style="font-size:11px;color:var(--muted);font-weight:400"></span></h2>
       <div id="pl-table" style="font-size:12px;color:var(--muted);">Belum ada data — Pattern Library mengumpulkan data dari setiap dry run yang selesai.</div>
+    </div>
+
+    <div class="card" style="grid-column:1/-1;">
+      <h2>Smart Money Wallets (Hivemind)</h2>
+      <div id="hv-table" style="font-size:12px;color:var(--muted);">No wallets discovered yet — Hivemind runs every 6h automatically.</div>
     </div>
 
     <div class="card" style="grid-column:1/-1;">
@@ -350,6 +363,73 @@
       }).catch(() => {})
     }
 
+    function loadHivemind() {
+      fetch('/api/hivemind').then(r => r.json()).then(d => {
+        document.getElementById('hv-count').textContent = d.wallet_count ?? '—'
+
+        const STATE_STYLE = {
+          ready:    'color:var(--green)',
+          cooldown: 'color:var(--muted)',
+          paused:   'color:#f0b429',
+          error:    'color:var(--red)',
+        }
+        const sourcesHtml = (d.sources || []).map(s => {
+          const stateLabel = s.state === 'ready' ? 'ready'
+            : s.state === 'cooldown' ? `cooldown (${s.detail})`
+            : s.state === 'paused'   ? `paused (${s.detail})`
+            : s.state
+          const style = STATE_STYLE[s.state] || ''
+          const fails = s.failure_count > 0 ? ` · ${s.failure_count} fail${s.failure_count > 1 ? 's' : ''}` : ''
+          const pauseBtn = s.state !== 'paused'
+            ? `<button onclick="sourcePause('${s.source}')" style="margin-left:8px;font-size:10px;padding:1px 6px;border:1px solid var(--border);background:transparent;color:var(--muted);border-radius:3px;cursor:pointer;">pause</button>`
+            : `<button onclick="sourceResume('${s.source}')" style="margin-left:8px;font-size:10px;padding:1px 6px;border:1px solid #f0b429;background:transparent;color:#f0b429;border-radius:3px;cursor:pointer;">resume</button>`
+          return `<div style="display:flex;align-items:center;gap:4px;padding:3px 0;border-bottom:1px solid var(--border)">` +
+            `<span style="width:70px;font-weight:600">${s.source}</span>` +
+            `<span style="${style}">${stateLabel}${fails}</span>` +
+            pauseBtn + `</div>`
+        }).join('')
+        document.getElementById('hv-sources').innerHTML = sourcesHtml || '<span style="color:var(--muted)">No sources configured</span>'
+      }).catch(() => {})
+
+      fetch('/api/hivemind/wallets').then(r => r.json()).then(d => {
+        const el = document.getElementById('hv-table')
+        if (!d.wallets?.length) return
+        const rows = d.wallets.map(w => {
+          const src  = `<span class="pill muted" style="font-size:10px">${w.source}</span>`
+          const hits = `<span style="color:var(--blue)">${w.pool_hits} pool${w.pool_hits !== 1 ? 's' : ''}</span>`
+          const ts   = w.discovered_at ? new Date(w.discovered_at).toLocaleDateString('id-ID') : '—'
+          const active = w.active
+            ? `<span class="pill green" style="font-size:10px">active</span>`
+            : `<span class="pill muted" style="font-size:10px">inactive</span>`
+          return `<div style="display:grid;grid-template-columns:120px 110px 80px 70px 1fr;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)">` +
+            `<span style="font-family:monospace;font-size:11px">${w.address.slice(0, 10)}…</span>` +
+            `<span>${w.label || '—'}</span>` +
+            `<span>${src}</span>` +
+            `<span>${hits}</span>` +
+            `<span style="color:var(--muted);font-size:10px">${ts}</span>` +
+            `</div>`
+        }).join('')
+        el.innerHTML = `<div style="display:grid;grid-template-columns:120px 110px 80px 70px 1fr;gap:8px;padding:0 0 5px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Address</span><span>Label</span><span>Source</span><span>Pools</span><span>Discovered</span></div>${rows}`
+      }).catch(() => {})
+    }
+
+    function runHivemind() {
+      fetch('/api/hivemind/run', { method: 'POST' })
+        .then(r => r.json())
+        .then(() => { addLog('Hivemind discovery started — check logs'); setTimeout(loadHivemind, 5000) })
+        .catch(e => addLog('Hivemind run failed: ' + e.message))
+    }
+
+    function sourcePause(name) {
+      fetch(`/api/hivemind/source/${name}/pause`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' })
+        .then(() => loadHivemind())
+    }
+
+    function sourceResume(name) {
+      fetch(`/api/hivemind/source/${name}/resume`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' })
+        .then(() => loadHivemind())
+    }
+
     function triggerScan() {
       const btn = document.getElementById('scan-btn')
       btn.textContent = '⏳ Scanning…'
@@ -377,6 +457,7 @@
         loadDryRun()
         loadWalletActions()
         loadPatternLibrary()
+        loadHivemind()
       }
       ws.onmessage = ({ data }) => {
         const msg = JSON.parse(data)
@@ -385,6 +466,7 @@
         if (msg.type === 'scan_result' || msg.type === 'recommendation_expired') { loadDecisions(); loadDryRun() }
         if (msg.type === 'dry_run_closed') loadDryRun()
         if (msg.type === 'wallet_action_detected' || msg.type === 'wallet_action') loadWalletActions()
+        if (msg.type === 'tracked_wallets_updated') { loadHivemind(); loadWalletActions(); addLog(`🐋 Hivemind: ${msg.discovered || '?'} new smart money wallet(s) discovered`) }
         if (msg.type === 'verdict_ready') {
           const el = document.getElementById(`verdict-${msg.decision_id}`)
           if (el) { el.textContent = msg.verdict; el.style.fontStyle = 'italic'; el.style.color = 'var(--muted)' }

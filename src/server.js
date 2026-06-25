@@ -123,6 +123,47 @@ app.get('/api/pattern-library', (req, res) => {
   }
 })
 
+// ── Hivemind Discovery API ────────────────────────────────────────────────────
+
+app.get('/api/hivemind', (req, res) => {
+  try {
+    const hivemind = require('./wallet/hivemind-discovery')
+    res.json(hivemind.getStatus())
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get('/api/hivemind/wallets', (req, res) => {
+  try {
+    const hivemind = require('./wallet/hivemind-discovery')
+    res.json({ wallets: hivemind.getTrackedWallets() })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post('/api/hivemind/run', async (req, res) => {
+  try {
+    const hivemind = require('./wallet/hivemind-discovery')
+    hivemind.runDiscovery().catch(e => console.error('[Hivemind] Manual run error:', e.message))
+    res.json({ ok: true, message: 'Discovery started — check logs for progress' })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post('/api/hivemind/source/:name/pause', (req, res) => {
+  try {
+    const hivemind = require('./wallet/hivemind-discovery')
+    const durationMs = parseInt(req.body?.durationMs || 24 * 3600 * 1000)
+    hivemind.pauseSource(req.params.name, durationMs)
+    res.json({ ok: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post('/api/hivemind/source/:name/resume', (req, res) => {
+  try {
+    const hivemind = require('./wallet/hivemind-discovery')
+    hivemind.resumeSource(req.params.name)
+    res.json({ ok: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 app.get('/api/wallet-actions', (req, res) => {
   try {
     const wallet = require('./wallet/index')
@@ -178,6 +219,7 @@ function setupWebSocket(server) {
   bus.onFast('scan_complete', (payload) => broadcast({ type: 'scan_complete', ...payload }))
   bus.onFast('alert_triggered', (payload) => broadcast({ type: 'alert_triggered', ...payload }))
   bus.onSlow('wallet_action_detected', (payload) => broadcast({ type: 'wallet_action_detected', ...payload }))
+  bus.onSlow('tracked_wallets_updated', (payload) => broadcast({ type: 'tracked_wallets_updated', ...payload }))
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
