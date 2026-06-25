@@ -34,6 +34,8 @@ app.get('/api/risk', (req, res) => res.json(riskState.state))
 app.post('/api/risk/circuit-breaker/reset', (req, res) => {
   riskState.resetCircuitBreaker()
   broadcast({ type: 'risk_update', risk: riskState.state })
+  const telegram = require('./notifications/telegram')
+  telegram.send('✅ <b>Circuit breaker di-reset</b>\nArgus kembali aktif dan bisa membuat rekomendasi.', 'P2')
   res.json({ ok: true })
 })
 

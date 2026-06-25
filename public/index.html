@@ -75,6 +75,7 @@
     <div class="card">
       <h2>Risk State</h2>
       <div class="metric"><span class="metric-label">Circuit Breaker</span><span id="cb-status" class="pill muted">—</span></div>
+      <div id="cb-reason-row" class="metric" style="display:none"><span class="metric-label">Reason</span><span class="metric-value" id="cb-reason" style="font-size:11px;color:var(--red)">—</span></div>
       <div class="metric"><span class="metric-label">Open Positions</span><span class="metric-value" id="open-count">—</span></div>
       <div class="metric"><span class="metric-label">Daily Loss</span><span class="metric-value" id="daily-loss">—</span></div>
       <div class="metric"><span class="metric-label">Blacklisted Tokens</span><span class="metric-value" id="bl-count">—</span></div>
@@ -117,6 +118,11 @@
     </div>
 
     <div class="card" style="grid-column:1/-1;">
+      <h2>Pattern Library <span id="pl-status" style="font-size:11px;color:var(--muted);font-weight:400"></span></h2>
+      <div id="pl-table" style="font-size:12px;color:var(--muted);">Belum ada data — Pattern Library mengumpulkan data dari setiap dry run yang selesai.</div>
+    </div>
+
+    <div class="card" style="grid-column:1/-1;">
       <h2>Wallet Actions</h2>
       <div id="wallet-table" style="font-size:12px;color:var(--muted);">Wallet Observer disabled — set wallet.address in user-config.json.</div>
     </div>
@@ -145,11 +151,22 @@
       const cb = document.getElementById('cb-status')
       cb.textContent = risk.circuit_breaker_open ? 'OPEN' : 'clear'
       cb.className = 'pill ' + (risk.circuit_breaker_open ? 'red' : 'green')
+      const reasonRow = document.getElementById('cb-reason-row')
+      if (risk.circuit_breaker_open && risk.circuit_breaker_reason) {
+        document.getElementById('cb-reason').textContent = risk.circuit_breaker_reason
+        reasonRow.style.display = ''
+      } else {
+        reasonRow.style.display = 'none'
+      }
       document.getElementById('open-count').textContent =
         `${risk.current_open_count} / ${risk.limits?.max_open_positions || 5}`
       document.getElementById('daily-loss').textContent =
         `$${(risk.daily_realized_loss_usd || 0).toFixed(2)} / $${risk.limits?.max_daily_loss_usd || 50}`
       document.getElementById('bl-count').textContent = (risk.blacklisted_tokens || []).length
+    }
+
+    function refreshRisk() {
+      fetch('/api/risk').then(r => r.json()).then(updateRisk).catch(() => {})
     }
 
     function loadDryRun() {
@@ -231,11 +248,43 @@
         document.getElementById('pl-active').textContent  = active.length
         document.getElementById('pl-samples').textContent = total
         document.getElementById('pl-pending').textContent = pending.length
-
-        const best = active.sort((a, b) => b.win_rate - a.win_rate)[0]
+        const best = [...active].sort((a, b) => b.win_rate - a.win_rate)[0]
         document.getElementById('pl-best').textContent = best
           ? `${best.volatility_bucket}×${best.regime}×${best.strategy} (${(best.win_rate*100).toFixed(0)}%)`
           : '—'
+
+        // Detail table
+        const el = document.getElementById('pl-table')
+        const status = document.getElementById('pl-status')
+        if (!patterns.length) {
+          el.textContent = 'Belum ada data — Pattern Library mengumpulkan data dari setiap dry run yang selesai.'
+          status.textContent = ''
+          return
+        }
+        status.textContent = `${active.length} aktif · ${pending.length} calibrating · ${total} samples`
+        const COLS = '120px 100px 100px 70px 80px 80px 70px'
+        const header = `<div style="display:grid;grid-template-columns:${COLS};gap:8px;padding:0 0 6px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">
+          <span>Bucket</span><span>Regime</span><span>Strategy</span><span>Samples</span><span>Win Rate</span><span>Avg P&L</span><span>Status</span></div>`
+        const rows = patterns.map(p => {
+          const wr   = p.win_rate != null ? `${(p.win_rate*100).toFixed(0)}%` : '—'
+          const pnl  = p.mean_pnl_net != null ? `${p.mean_pnl_net >= 0 ? '+' : ''}${p.mean_pnl_net.toFixed(1)}%` : '—'
+          const wrColor = p.active ? (p.win_rate > 0.6 ? 'var(--green)' : p.win_rate < 0.4 ? 'var(--red)' : '') : 'var(--muted)'
+          const pnlColor = p.mean_pnl_net > 0 ? 'var(--green)' : p.mean_pnl_net < 0 ? 'var(--red)' : ''
+          const pill = p.active
+            ? `<span class="pill green" style="font-size:10px">aktif</span>`
+            : `<span class="pill muted" style="font-size:10px">N=${p.sample_count}/20</span>`
+          const stratColor = STRATEGY_COLOR[p.strategy] || 'muted'
+          return `<div style="display:grid;grid-template-columns:${COLS};gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)">
+            <span style="font-size:11px">${p.volatility_bucket}</span>
+            <span style="font-size:11px">${p.regime}</span>
+            <span><span class="pill ${stratColor}" style="font-size:10px">${p.strategy}</span></span>
+            <span>${p.sample_count}</span>
+            <span style="color:${wrColor};font-weight:600">${wr}</span>
+            <span style="color:${pnlColor}">${pnl}</span>
+            <span>${pill}</span>
+          </div>`
+        }).join('')
+        el.innerHTML = header + rows
       }).catch(() => {})
     }
 
@@ -318,6 +367,7 @@
       ws.onmessage = ({ data }) => {
         const msg = JSON.parse(data)
         if (msg.type === 'init' || msg.type === 'risk_update') updateRisk(msg.risk)
+        if (msg.type === 'risk_gate_blocked') { refreshRisk(); addLog(`⛔ ${msg.reason || 'Risk gate blocked'}`) }
         if (msg.type === 'scan_result' || msg.type === 'recommendation_expired') { loadDecisions(); loadDryRun() }
         if (msg.type === 'dry_run_closed') loadDryRun()
         if (msg.type === 'wallet_action_detected' || msg.type === 'wallet_action') loadWalletActions()
