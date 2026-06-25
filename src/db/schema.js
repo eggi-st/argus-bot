@@ -154,9 +154,16 @@ function initSchema() {
 // ALTER TABLE migrations — safe to re-run (duplicate column errors are silently ignored)
 function migrateSchema() {
   const cols = [
+    // wallet_actions columns (original)
     `ALTER TABLE wallet_actions ADD COLUMN wallet_address TEXT`,
     `ALTER TABLE wallet_actions ADD COLUMN wallet_label TEXT`,
     `ALTER TABLE wallet_actions ADD COLUMN wallet_type TEXT DEFAULT 'own'`,
+    // dry_run_positions — gap-fix columns (2026-06-25)
+    `ALTER TABLE dry_run_positions ADD COLUMN entry_fee_rate REAL`,
+    `ALTER TABLE dry_run_positions ADD COLUMN fee_window_minutes INTEGER`,
+    `ALTER TABLE dry_run_positions ADD COLUMN close_reason TEXT`,
+    `ALTER TABLE dry_run_positions ADD COLUMN exit_metrics_json TEXT`,
+    `ALTER TABLE dry_run_positions ADD COLUMN simulated_fee_pct REAL`,
   ]
   let added = 0
   for (const sql of cols) {
@@ -164,6 +171,26 @@ function migrateSchema() {
       if (!e.message?.includes('duplicate column name')) console.warn('[Schema] Migration:', e.message)
     }
   }
+
+  // screening_rejections table — records every pool filtered out during a scan
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS screening_rejections (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        scanned_at   TEXT    NOT NULL,
+        pool_address TEXT,
+        token_symbol TEXT,
+        token_mint   TEXT,
+        reject_stage TEXT    NOT NULL,
+        reason       TEXT    NOT NULL,
+        key_metrics  TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_rej_scanned ON screening_rejections(scanned_at);
+    `)
+  } catch (e) {
+    if (!e.message?.includes('already exists')) console.warn('[Schema] screening_rejections:', e.message)
+  }
+
   try {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_wallet_type ON wallet_actions(wallet_type, detected_at)`)
   } catch (e) {
@@ -174,7 +201,7 @@ function migrateSchema() {
   } catch (e) {
     if (!e.message?.includes('already exists')) console.warn('[Schema] Sig index migration:', e.message)
   }
-  if (added) console.log(`[Schema] Added ${added} column(s) to wallet_actions`)
+  if (added) console.log(`[Schema] Added ${added} column(s) via migration`)
 }
 
 // ── Command Queue helpers ─────────────────────────────────────────────────────
@@ -221,11 +248,27 @@ function recordDryRunPosition(data) {
 function closeDryRunPosition(id, data) {
   return getStmt('closeDryRun', `
     UPDATE dry_run_positions
-    SET closed_at = @closed_at, exit_price_sol = @exit_price_sol,
-        gross_pnl_pct = @gross_pnl_pct, net_pnl_pct = @net_pnl_pct,
-        hold_minutes = @hold_minutes, outcome_valid = 1, status = 'closed'
+    SET closed_at          = @closed_at,
+        exit_price_sol     = @exit_price_sol,
+        gross_pnl_pct      = @gross_pnl_pct,
+        net_pnl_pct        = @net_pnl_pct,
+        hold_minutes       = @hold_minutes,
+        close_reason       = @close_reason,
+        exit_metrics_json  = @exit_metrics_json,
+        simulated_fee_pct  = @simulated_fee_pct,
+        outcome_valid      = 1,
+        status             = 'closed'
     WHERE id = @id
   `).run({ ...data, id })
+}
+
+function recordRejection(data) {
+  return getStmt('insertRejection', `
+    INSERT INTO screening_rejections
+      (scanned_at, pool_address, token_symbol, token_mint, reject_stage, reason, key_metrics)
+    VALUES
+      (@scanned_at, @pool_address, @token_symbol, @token_mint, @reject_stage, @reason, @key_metrics)
+  `).run(data)
 }
 
 function recordWalletAction(data) {
@@ -245,5 +288,5 @@ module.exports = {
   initSchema, db,
   recordDecision, expireDecision, markFollowed,
   recordDryRunPosition, closeDryRunPosition,
-  recordWalletAction,
+  recordWalletAction, recordRejection,
 }

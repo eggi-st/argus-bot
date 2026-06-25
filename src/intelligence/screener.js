@@ -2,6 +2,7 @@
 const fetch = require('node-fetch')
 const db = require('../db/database')
 const { getConfig } = require('../config')
+const { recordRejection } = require('../db/schema')
 
 const POOL_DISCOVERY_BASE = 'https://pool-discovery-api.datapi.meteora.ag'
 const OKX_BASE = 'https://web3.okx.com'
@@ -354,15 +355,41 @@ async function discoverPools({ page_size = 50 } = {}) {
   rawPools = await applyVolatilityTf(rawPools, s.timeframe)
 
   const filteredExamples = []
+  const scanTime = new Date().toISOString()
   const passed = rawPools.filter(pool => {
     const reason = getRejectReason(pool, s)
     if (reason) {
       filteredExamples.push({ name: pool.name || '?', reason })
+      try {
+        recordRejection({
+          scanned_at:   scanTime,
+          pool_address: pool.pool_address,
+          token_symbol: pool.token_x?.symbol || null,
+          token_mint:   getBaseMint(pool),
+          reject_stage: 'screener',
+          reason,
+          key_metrics:  JSON.stringify({
+            vol:     pool.volatility,
+            fee_tvl: pool.fee_active_tvl_ratio,
+            organic: pool.token_x?.organic_score,
+            holders: pool.base_token_holders,
+            tvl:     pool.tvl,
+            mcap:    pool.token_x?.market_cap,
+          }),
+        })
+      } catch {}
       return false
     }
     const mint = getBaseMint(pool)
     if (isTokenBlacklisted(mint)) {
       filteredExamples.push({ name: pool.name || '?', reason: 'blacklisted token' })
+      try {
+        recordRejection({
+          scanned_at: scanTime, pool_address: pool.pool_address,
+          token_symbol: pool.token_x?.symbol || null, token_mint: mint,
+          reject_stage: 'screener', reason: 'blacklisted token', key_metrics: null,
+        })
+      } catch {}
       return false
     }
     return true
@@ -400,26 +427,33 @@ async function getTopCandidates({ limit = 10 } = {}) {
     await enrichWithOkx(deduped)
   }
 
-  // Post-enrichment hard filters
+  const now = new Date().toISOString()
+
+  // Post-enrichment hard filters + rejection log
   const clean = deduped.filter(p => {
-    if (p.is_wash) {
-      log('screener', `Drop wash trading: ${p.name}`)
-      filtered_examples.push({ name: p.name || '?', reason: 'wash trading flagged' })
-      return false
-    }
-    if (p.is_rugpull) {
-      log('screener', `Drop rugpull risk: ${p.name}`)
-      filtered_examples.push({ name: p.name || '?', reason: 'rugpull flagged' })
-      return false
-    }
-    if (p.is_honeypot) {
-      log('screener', `Drop honeypot: ${p.name}`)
-      filtered_examples.push({ name: p.name || '?', reason: 'honeypot flagged' })
-      return false
-    }
-    if (isDeployerBlacklisted(p.dev)) {
-      log('screener', `Drop blocked deployer: ${p.name}`)
-      filtered_examples.push({ name: p.name || '?', reason: 'blocked deployer' })
+    let rejectReason = null
+    if (p.is_wash)                       rejectReason = 'wash trading flagged'
+    else if (p.is_rugpull)               rejectReason = 'rugpull flagged'
+    else if (p.is_honeypot)              rejectReason = 'honeypot flagged'
+    else if (isDeployerBlacklisted(p.dev)) rejectReason = 'blocked deployer'
+
+    if (rejectReason) {
+      log('screener', `Drop ${rejectReason}: ${p.name}`)
+      filtered_examples.push({ name: p.name || '?', reason: rejectReason })
+      try {
+        recordRejection({
+          scanned_at:   now,
+          pool_address: p.pool,
+          token_symbol: p.base?.symbol || null,
+          token_mint:   p.base?.mint   || null,
+          reject_stage: 'enrichment',
+          reason:       rejectReason,
+          key_metrics:  JSON.stringify({
+            vol: p.volatility, fee_tvl: p.fee_active_tvl_ratio,
+            organic: p.organic_score, holders: p.holders,
+          }),
+        })
+      } catch {}
       return false
     }
     return true

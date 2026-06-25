@@ -2,7 +2,30 @@
 const bus = require('../core/event-bus')
 const db = require('../db/database')
 const { recordDryRunPosition, closeDryRunPosition } = require('../db/schema')
-const { getPriceForPosition } = require('./price-feed')
+const { getPoolSnapshot, getDexscreenerPrice } = require('./price-feed')
+
+// Range bins by strategy — how many bins wide a typical position is
+const RANGE_BINS_BY_STRATEGY = { spot: 69, bid_ask: 34, limit_order: 10 }
+// Fee window in minutes matching the screener timeframe (30m API call for snapshot)
+const SNAPSHOT_TF_MINUTES = 30
+// In-range efficiency factor: fraction of hold time estimated to be in active range
+const IN_RANGE_FACTOR = 0.6
+
+async function getPriceForPosition(tokenMint, poolAddress) {
+  if (poolAddress) {
+    try {
+      const snap = await getPoolSnapshot(poolAddress)
+      if (snap?.price != null && snap.price > 0) return snap.price
+    } catch {}
+  }
+  if (tokenMint) {
+    try {
+      const d = await getDexscreenerPrice(tokenMint)
+      if (d?.price_sol != null && d.price_sol > 0) return d.price_sol
+    } catch {}
+  }
+  return null
+}
 const { getConfig } = require('../config')
 
 /**
@@ -26,18 +49,20 @@ function openForDecision(decisionId, pool, strategy) {
 
   try {
     const result = recordDryRunPosition({
-      decision_id: decisionId,
-      opened_at: new Date().toISOString(),
-      token_mint: pool.base.mint,
-      token_symbol: pool.base.symbol || null,
-      pool_address: pool.pool,
+      decision_id:           decisionId,
+      opened_at:             new Date().toISOString(),
+      token_mint:            pool.base.mint,
+      token_symbol:          pool.base.symbol || null,
+      pool_address:          pool.pool,
       strategy,
-      entry_price_sol: pool.price,
-      entry_bin: null,
-      range_bins: 14,
-      sol_amount: solAmount,
+      entry_price_sol:       pool.price,
+      entry_bin:             null,
+      range_bins:            RANGE_BINS_BY_STRATEGY[strategy] ?? 34,
+      sol_amount:            solAmount,
       simulated_slippage_pct: 0.3,
-      tx_cost_usd: 0.002,
+      tx_cost_usd:           0.002,
+      entry_fee_rate:        pool.fee_active_tvl_ratio ?? null,
+      fee_window_minutes:    SNAPSHOT_TF_MINUTES,
     })
     console.log(`[DryRun] Opened #${result.lastInsertRowid}: ${pool.base.symbol} → ${strategy} @ ${pool.price} SOL (${solAmount} SOL stake)`)
   } catch (e) {
@@ -70,7 +95,17 @@ async function updateOpenPositions() {
 
   for (const pos of positions) {
     try {
-      const currentPrice = await getPriceForPosition(pos.token_mint, pos.pool_address)
+      // Fetch price + exit metrics in a single API call
+      let currentPrice = null
+      let exitSnapshot = null
+      if (pos.pool_address) {
+        exitSnapshot = await getPoolSnapshot(pos.pool_address)
+        currentPrice = exitSnapshot?.price ?? null
+      }
+      if (currentPrice == null && pos.token_mint) {
+        const d = await getDexscreenerPrice(pos.token_mint)
+        currentPrice = d?.price_sol ?? null
+      }
       if (currentPrice == null) continue
 
       // Bootstrap: fill entry price if it was null at open time
@@ -96,34 +131,53 @@ async function updateOpenPositions() {
         null
 
       if (closeReason) {
+        // Simulate fee income: entry_fee_rate (fee/TVL over fee_window) × hold fraction × in-range factor
+        let simulatedFeePct = 0
+        const entryFeeRate   = pos.entry_fee_rate ?? null
+        const feeWindowMins  = pos.fee_window_minutes ?? SNAPSHOT_TF_MINUTES
+        if (entryFeeRate != null && holdMinutes > 0) {
+          simulatedFeePct = entryFeeRate * (holdMinutes / feeWindowMins) * IN_RANGE_FACTOR
+          simulatedFeePct = Math.round(simulatedFeePct * 10000) / 10000
+        }
+
+        // Net P&L = gross price change + fee income − slippage both ways
+        const slipBothWays = (pos.simulated_slippage_pct ?? 0.3) * 2
+        const finalNetPnlPct = grossPnlPct + simulatedFeePct - slipBothWays
+
         closeDryRunPosition(pos.id, {
-          closed_at:       new Date().toISOString(),
-          exit_price_sol:  currentPrice,
-          gross_pnl_pct:   Math.round(grossPnlPct  * 100) / 100,
-          net_pnl_pct:     Math.round(netPnlPct    * 100) / 100,
-          hold_minutes:    holdMinutes,
+          closed_at:          new Date().toISOString(),
+          exit_price_sol:     currentPrice,
+          gross_pnl_pct:      Math.round(grossPnlPct     * 100) / 100,
+          net_pnl_pct:        Math.round(finalNetPnlPct  * 100) / 100,
+          hold_minutes:       holdMinutes,
+          close_reason:       closeReason,
+          exit_metrics_json:  exitSnapshot ? JSON.stringify(exitSnapshot) : null,
+          simulated_fee_pct:  simulatedFeePct,
         })
 
         const dir = grossPnlPct >= 0 ? '▲' : '▼'
-        console.log(`[DryRun] Closed #${pos.id} ${pos.token_symbol} ${dir}${Math.abs(grossPnlPct).toFixed(2)}% net=${netPnlPct.toFixed(2)}% (${closeReason}, hold=${holdMinutes}m)`)
+        const feeStr = simulatedFeePct > 0 ? ` fee=+${(simulatedFeePct*100).toFixed(2)}%` : ''
+        console.log(`[DryRun] Closed #${pos.id} ${pos.token_symbol} ${dir}${Math.abs(grossPnlPct).toFixed(2)}% net=${finalNetPnlPct.toFixed(2)}%${feeStr} (${closeReason}, hold=${holdMinutes}m)`)
 
         bus.emitSafe('outcome_recorded', {
-          position_id:  pos.id,
-          token_symbol: pos.token_symbol,
-          strategy:     pos.strategy,
-          gross_pnl_pct: Math.round(grossPnlPct  * 100) / 100,
-          net_pnl_pct:   Math.round(netPnlPct    * 100) / 100,
-          hold_minutes:  holdMinutes,
-          close_reason:  closeReason,
-          win:           netPnlPct > 0,
+          position_id:       pos.id,
+          token_symbol:      pos.token_symbol,
+          strategy:          pos.strategy,
+          gross_pnl_pct:     Math.round(grossPnlPct    * 100) / 100,
+          net_pnl_pct:       Math.round(finalNetPnlPct * 100) / 100,
+          simulated_fee_pct: simulatedFeePct,
+          hold_minutes:      holdMinutes,
+          close_reason:      closeReason,
+          win:               finalNetPnlPct > 0,
         })
 
         bus.emitSafe('ui_update', {
-          type: 'dry_run_closed',
-          token_symbol: pos.token_symbol,
-          strategy:     pos.strategy,
-          net_pnl_pct:  Math.round(netPnlPct * 100) / 100,
-          close_reason: closeReason,
+          type:              'dry_run_closed',
+          token_symbol:      pos.token_symbol,
+          strategy:          pos.strategy,
+          net_pnl_pct:       Math.round(finalNetPnlPct * 100) / 100,
+          simulated_fee_pct: simulatedFeePct,
+          close_reason:      closeReason,
         })
       }
     } catch (e) {
@@ -184,18 +238,20 @@ function bootstrap() {
     try {
       const cfg = getConfig()
       const result = recordDryRunPosition({
-        decision_id: dec.id,
-        opened_at: new Date().toISOString(),
-        token_mint: dec.token_mint,
-        token_symbol: dec.token_symbol,
-        pool_address: dec.pool_address,
-        strategy: dec.strategy,
-        entry_price_sol: null,   // will be filled on first update with confirmed price
-        entry_bin: null,
-        range_bins: 14,
-        sol_amount: cfg.dryRun?.solAmount ?? 0.1,
+        decision_id:            dec.id,
+        opened_at:              new Date().toISOString(),
+        token_mint:             dec.token_mint,
+        token_symbol:           dec.token_symbol,
+        pool_address:           dec.pool_address,
+        strategy:               dec.strategy,
+        entry_price_sol:        null,   // filled on first update
+        entry_bin:              null,
+        range_bins:             RANGE_BINS_BY_STRATEGY[dec.strategy] ?? 34,
+        sol_amount:             cfg.dryRun?.solAmount ?? 0.1,
         simulated_slippage_pct: 0.3,
-        tx_cost_usd: 0.002,
+        tx_cost_usd:            0.002,
+        entry_fee_rate:         null,   // not available at bootstrap — filled later if possible
+        fee_window_minutes:     SNAPSHOT_TF_MINUTES,
       })
       console.log(`[DryRun] Bootstrap: opened position for orphaned decision #${dec.id} (${dec.token_symbol})`)
     } catch (e) {

@@ -10,14 +10,36 @@ const FETCH_TIMEOUT_MS = 8_000
  * Returns pool_price in SOL terms (same source as entry_price_sol from screener).
  */
 async function getPoolPrice(poolAddress) {
+  const snap = await getPoolSnapshot(poolAddress)
+  return snap?.price ?? null
+}
+
+/**
+ * Fetch price + exit metrics for a pool in one API call.
+ * Used by the dry-run engine to capture pool state at close time.
+ * Returns null if the pool is no longer available.
+ */
+async function getPoolSnapshot(poolAddress) {
+  if (!poolAddress) return null
   const url = `${POOL_DISCOVERY_BASE}/pools?page_size=1` +
-    `&filter_by=${encodeURIComponent(`pool_address=${poolAddress}`)}&timeframe=5m`
-  const res = await fetch(url, { timeout: FETCH_TIMEOUT_MS })
-  if (!res.ok) return null
-  const data = await res.json()
-  const pool = (data.data || [])[0]
-  if (!pool?.pool_price) return null
-  return parseFloat(pool.pool_price)
+    `&filter_by=${encodeURIComponent(`pool_address=${poolAddress}`)}&timeframe=30m`
+  try {
+    const res = await fetch(url, { timeout: FETCH_TIMEOUT_MS })
+    if (!res.ok) return null
+    const data = await res.json()
+    const p = (data.data || [])[0]
+    if (!p?.pool_price) return null
+    return {
+      price:              parseFloat(p.pool_price),
+      fee_active_tvl_ratio: p.fee_active_tvl_ratio != null ? parseFloat(p.fee_active_tvl_ratio) : null,
+      volatility:           p.volatility            != null ? parseFloat(p.volatility)            : null,
+      volume_change_pct:    p.volume_change_pct     != null ? parseFloat(p.volume_change_pct)     : null,
+      price_change_pct:     p.pool_price_change_pct != null ? parseFloat(p.pool_price_change_pct) : null,
+      tvl:                  p.tvl                   != null ? parseFloat(p.tvl)                   : null,
+    }
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -66,4 +88,4 @@ async function getPriceForPosition(tokenMint, poolAddress) {
   return null
 }
 
-module.exports = { getPoolPrice, getDexscreenerPrice, getPriceForPosition }
+module.exports = { getPoolPrice, getPoolSnapshot, getDexscreenerPrice, getPriceForPosition }

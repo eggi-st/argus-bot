@@ -254,6 +254,11 @@
     </div>
 
     <div class="card full">
+      <h2>Rejection Log <span id="rej-summary" style="font-size:11px;color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none;"></span></h2>
+      <div id="rej-table" class="empty">Menunggu scan pertama…</div>
+    </div>
+
+    <div class="card full">
       <h2>Live Events</h2>
       <div id="log">Menunggu koneksi WebSocket…</div>
     </div>
@@ -405,30 +410,36 @@
 
         const el = document.getElementById('dryrun-table')
         if (!d.positions?.length) { el.innerHTML = '<div class="empty">Belum ada posisi.</div>'; return }
-        const COLS = '110px 90px 80px 70px 1fr'
+        const COLS = '110px 90px 80px 60px 80px 1fr'
         const rows = d.positions.slice(0, 15).map(p => {
           const isOpen = p.status === 'open'
           const pnl = isOpen ? null : p.net_pnl_pct
           const pnlStr = pnl != null
             ? `<span style="font-weight:600;color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'}">${pnl >= 0 ? '+' : ''}${pnl}%</span>`
             : `<span style="color:var(--muted)"><span class="live-dot"></span>live</span>`
+          const feeStr = p.simulated_fee_pct > 0
+            ? `<span style="color:var(--green);font-size:11px">+${(p.simulated_fee_pct*100).toFixed(1)}%</span>`
+            : `<span style="color:var(--muted);font-size:11px">—</span>`
           const holdStr = p.hold_minutes != null ? p.hold_minutes + 'm' : '—'
           const stratColor = STRATEGY_COLOR[p.strategy] || 'muted'
           const dexLink = p.token_mint
             ? `<a href="https://dexscreener.com/solana/${p.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">${p.token_symbol || p.token_mint.slice(0,8)}</a>`
             : `<span style="font-weight:600">${p.token_symbol || '?'}</span>`
-          const statusEl = isOpen
-            ? `<span style="color:var(--green);font-size:11px">open</span>`
-            : `<span style="color:var(--muted);font-size:11px">${p.status}</span>`
+          const CLOSE_COLOR = { stop_loss:'var(--red)', take_profit:'var(--green)', max_hold:'var(--muted)', ttl_expired:'var(--muted)' }
+          const CLOSE_LABEL = { stop_loss:'SL', take_profit:'TP', max_hold:'time', ttl_expired:'TTL' }
+          const closeEl = isOpen
+            ? `<span style="color:var(--green);font-size:11px"><span class="live-dot"></span>open</span>`
+            : `<span style="color:${CLOSE_COLOR[p.close_reason]||'var(--muted)'};font-size:11px">${CLOSE_LABEL[p.close_reason]||p.close_reason||'closed'}</span>`
           return `<div class="tbl-row" style="display:grid;grid-template-columns:${COLS};gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">` +
             `<span>${dexLink}</span>` +
             `<span><span class="pill ${stratColor}">${p.strategy}</span></span>` +
             `<span>${pnlStr}</span>` +
+            `<span>${feeStr}</span>` +
             `<span style="color:var(--muted)">${holdStr}</span>` +
-            `<span>${statusEl}</span>` +
+            `<span>${closeEl}</span>` +
             `</div>`
         }).join('')
-        el.innerHTML = `<div style="display:grid;grid-template-columns:${COLS};gap:10px;padding:0 0 7px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Token</span><span>Strategy</span><span>Net P&L</span><span>Hold</span><span>Status</span></div>${rows}`
+        el.innerHTML = `<div style="display:grid;grid-template-columns:${COLS};gap:10px;padding:0 0 7px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Token</span><span>Strategy</span><span>Net P&L</span><span>Fee sim</span><span>Hold</span><span>Exit</span></div>${rows}`
       }).catch(() => {})
     }
 
@@ -537,6 +548,49 @@
       }).catch(() => {})
     }
 
+    // ── Rejection Log ─────────────────────────────────────────────────────────
+    function loadRejections() {
+      apiFetch('/api/screening-rejections?limit=30').then(r => r.json()).then(d => {
+        const el = document.getElementById('rej-table')
+        const sumEl = document.getElementById('rej-summary')
+
+        // Summary pills
+        const top = (d.summary || []).slice(0, 5)
+        sumEl.innerHTML = top.map(s =>
+          `<span class="pill muted" style="font-size:10px;margin-right:4px">${s.reason} ×${s.count}</span>`
+        ).join('')
+
+        if (!d.rejections?.length) { el.innerHTML = '<div class="empty">Belum ada data — akan terisi setelah scan pertama.</div>'; return }
+        const COLS = '55px 100px 95px 1fr 80px'
+        const rows = d.rejections.slice(0, 25).map(r => {
+          const ts = new Date(r.scanned_at).toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'})
+          const stagePill = r.reject_stage === 'screener'
+            ? `<span class="pill muted" style="font-size:10px">filter</span>`
+            : `<span class="pill yellow" style="font-size:10px">enrich</span>`
+          const tok = r.token_mint
+            ? `<a href="https://dexscreener.com/solana/${r.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none">${r.token_symbol || r.token_mint.slice(0,8)}</a>`
+            : (r.token_symbol || '—')
+          let metrics = ''
+          try {
+            const m = JSON.parse(r.key_metrics || '{}')
+            const parts = []
+            if (m.vol  != null) parts.push(`vol ${parseFloat(m.vol).toFixed(1)}`)
+            if (m.fee_tvl != null) parts.push(`fee/tvl ${parseFloat(m.fee_tvl).toFixed(2)}`)
+            if (m.organic != null) parts.push(`org ${m.organic}`)
+            metrics = parts.join(' · ')
+          } catch {}
+          return `<div class="tbl-row" style="display:grid;grid-template-columns:${COLS};gap:10px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)">` +
+            `<span style="color:var(--muted);font-size:11px">${ts}</span>` +
+            `<span>${tok}</span>` +
+            `<span>${stagePill}</span>` +
+            `<span style="color:var(--muted);font-size:12px">${r.reason}</span>` +
+            `<span style="color:var(--muted);font-size:11px">${metrics}</span>` +
+            `</div>`
+        }).join('')
+        el.innerHTML = `<div style="display:grid;grid-template-columns:${COLS};gap:10px;padding:0 0 7px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Time</span><span>Token</span><span>Stage</span><span>Reason</span><span>Metrics</span></div>${rows}`
+      }).catch(() => {})
+    }
+
     // ── Hivemind ──────────────────────────────────────────────────────────────
     function loadHivemind() {
       apiFetch('/api/hivemind').then(r => r.json()).then(d => {
@@ -597,13 +651,13 @@
           document.getElementById('uptime').textContent = Math.floor(d.uptime) + 's'
           document.getElementById('sched-status').textContent = d.scheduler.length + ' jobs'
         })
-        loadDecisions(); loadDryRun(); loadWalletActions(); loadPatternLibrary(); loadHivemind()
+        loadDecisions(); loadDryRun(); loadWalletActions(); loadPatternLibrary(); loadHivemind(); loadRejections()
       }
       ws.onmessage = ({ data }) => {
         const msg = JSON.parse(data)
         if (msg.type === 'init' || msg.type === 'risk_update') updateRisk(msg.risk)
         if (msg.type === 'risk_gate_blocked') apiFetch('/api/risk').then(r => r.json()).then(updateRisk).catch(() => {})
-        if (msg.type === 'scan_result' || msg.type === 'recommendation_expired' || msg.type === 'scan_complete') { loadDecisions(); loadDryRun() }
+        if (msg.type === 'scan_result' || msg.type === 'recommendation_expired' || msg.type === 'scan_complete') { loadDecisions(); loadDryRun(); loadRejections() }
         if (msg.type === 'dry_run_closed') loadDryRun()
         if (msg.type === 'wallet_action_detected') loadWalletActions()
         if (msg.type === 'tracked_wallets_updated') { loadHivemind(); loadWalletActions() }

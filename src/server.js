@@ -169,7 +169,8 @@ app.get('/api/dry-run', (req, res) => {
     const positions = db.prepare(`
       SELECT dr.id, dr.opened_at, dr.closed_at, dr.token_symbol, dr.token_mint,
              dr.pool_address, dr.strategy, dr.entry_price_sol, dr.exit_price_sol,
-             dr.sol_amount, dr.gross_pnl_pct, dr.net_pnl_pct, dr.hold_minutes,
+             dr.sol_amount, dr.range_bins, dr.gross_pnl_pct, dr.net_pnl_pct,
+             dr.simulated_fee_pct, dr.hold_minutes, dr.close_reason,
              dr.status, dr.outcome_valid
       FROM dry_run_positions dr
       ${where}
@@ -333,6 +334,27 @@ app.get('/api/wallet-actions', (req, res) => {
       ORDER BY detected_at DESC LIMIT ?
     `).all(limit)
     res.json({ actions, status: wallet.observer.getStatus() })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.get('/api/screening-rejections', (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit || '50', 10), 500)
+    const since = req.query.since  // optional ISO timestamp filter
+    const rows = since
+      ? db.prepare(`SELECT * FROM screening_rejections WHERE scanned_at >= ? ORDER BY scanned_at DESC LIMIT ?`).all(since, limit)
+      : db.prepare(`SELECT * FROM screening_rejections ORDER BY scanned_at DESC LIMIT ?`).all(limit)
+    // Top reject reasons summary
+    const summary = db.prepare(`
+      SELECT reason, reject_stage, COUNT(*) AS count
+      FROM screening_rejections
+      GROUP BY reason, reject_stage
+      ORDER BY count DESC
+      LIMIT 20
+    `).all()
+    res.json({ rejections: rows, summary })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
