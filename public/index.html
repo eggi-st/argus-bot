@@ -4,7 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Argus</title>
-  <meta name="theme-color" content="#0f1117"/>
+  <meta name="theme-color" content="#090d18"/>
   <meta name="mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
@@ -14,73 +14,142 @@
   <link rel="manifest" href="/manifest.json"/>
   <style>
     :root {
-      --bg: #0f1117;
-      --bg2: #1e293b;
-      --border: #334155;
-      --text: #e2e8f0;
-      --muted: #64748b;
-      --green: #22c55e;
+      --bg:     #090d18;
+      --bg2:    #111827;
+      --bg3:    #1a2234;
+      --border: #1e2d42;
+      --text:   #e2e8f0;
+      --muted:  #4b6180;
+      --green:  #10b981;
       --yellow: #f59e0b;
-      --red: #ef4444;
-      --blue: #3b82f6;
+      --red:    #ef4444;
+      --blue:   #3b82f6;
+      --purple: #8b5cf6;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--bg); color: var(--text); font-family: system-ui, monospace; font-size: 14px; }
-    header { display: flex; align-items: center; gap: 12px; padding: 16px 24px; border-bottom: 1px solid var(--border); }
-    header h1 { font-size: 18px; letter-spacing: 2px; font-weight: 700; }
-    header h1 span { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 8px; }
-    #status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
-    #status-dot.online { background: var(--green); }
-    #status-dot.offline { background: var(--red); }
-    main { padding: 24px; display: grid; gap: 16px; grid-template-columns: repeat(3, 1fr); }
-    .card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
-    .card h2 { font-size: 11px; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; margin-bottom: 12px; }
-    .metric { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
-    .metric:last-child { border-bottom: none; }
-    .metric-label { color: var(--muted); }
-    .metric-value { font-weight: 600; }
-    .pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-    .pill.green { background: rgba(34,197,94,.15); color: var(--green); }
-    .pill.red { background: rgba(239,68,68,.15); color: var(--red); }
-    .pill.yellow { background: rgba(245,158,11,.15); color: var(--yellow); }
-    .pill.muted { background: rgba(100,116,139,.15); color: var(--muted); }
-    .phase-banner { grid-column: 1/-1; background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--blue); border-radius: 8px; padding: 20px 24px; }
-    .phase-banner h2 { color: var(--blue); font-size: 13px; margin-bottom: 8px; }
-    .phase-list { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-    .phase-item { padding: 6px 12px; border-radius: 4px; font-size: 12px; }
-    .phase-item.done { background: rgba(34,197,94,.1); color: var(--green); border: 1px solid rgba(34,197,94,.2); }
-    .phase-item.next { background: rgba(245,158,11,.1); color: var(--yellow); border: 1px solid rgba(245,158,11,.2); }
-    .phase-item.pending { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
-    #log { font-size: 12px; font-family: monospace; color: var(--muted); line-height: 1.8; }
-  #login-overlay {
-    position: fixed; inset: 0; background: var(--bg); display: flex;
-    align-items: center; justify-content: center; z-index: 9999;
-  }
-  #login-overlay.hidden { display: none; }
-  #login-box {
-    background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
-    padding: 40px 48px; width: 340px; text-align: center;
-  }
-  #login-box h2 { font-size: 20px; letter-spacing: 2px; margin-bottom: 8px; }
-  #login-box p { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
-  #login-box input {
-    width: 100%; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border);
-    border-radius: 6px; color: var(--text); font-size: 14px; margin-bottom: 12px; outline: none;
-  }
-  #login-box input:focus { border-color: var(--blue); }
-  #login-box button {
-    width: 100%; padding: 10px; background: var(--blue); border: none; border-radius: 6px;
-    color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
-  }
-  #login-box button:hover { opacity: 0.85; }
-  #login-error { color: var(--red); font-size: 12px; margin-top: 10px; min-height: 18px; }
+    @keyframes pulse-dot {
+      0%,100% { box-shadow: 0 0 0 0 rgba(16,185,129,.5); }
+      60%      { box-shadow: 0 0 0 6px rgba(16,185,129,0); }
+    }
+    @keyframes spin    { to { transform: rotate(360deg); } }
+    @keyframes fadeUp  { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes flash   { 0% { background:rgba(59,130,246,.18); } 100% { background:transparent; } }
+    @keyframes blink   { 0%,100% { opacity:1; } 50% { opacity:.3; } }
+    @keyframes slideIn { from { opacity:0; transform:translateX(-6px); } to { opacity:1; transform:translateX(0); } }
+
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,sans-serif; font-size:14px; line-height:1.5; }
+
+    /* ── Header ── */
+    header {
+      display:flex; align-items:center; gap:12px;
+      padding:12px 24px;
+      background:var(--bg2); border-bottom:1px solid var(--border);
+      position:sticky; top:0; z-index:100;
+    }
+    header h1 { font-size:15px; letter-spacing:3px; font-weight:700; }
+    header h1 span { color:var(--muted); font-weight:400; font-size:12px; margin-left:6px; letter-spacing:1px; }
+    #status-dot { width:9px; height:9px; border-radius:50%; background:var(--muted); flex-shrink:0; transition:background .3s; }
+    #status-dot.online  { background:var(--green); animation:pulse-dot 2.5s infinite; }
+    #status-dot.offline { background:var(--red); }
+    #ts { margin-left:auto; color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+
+    /* ── Layout ── */
+    main { padding:20px; display:grid; gap:14px; grid-template-columns:repeat(3,1fr); }
+
+    /* ── Cards ── */
+    .card {
+      background:var(--bg2); border:1px solid var(--border); border-radius:10px;
+      padding:16px 18px; transition:border-color .2s;
+    }
+    .card:hover { border-color:#2a3d58; }
+    .card.full  { grid-column:1/-1; }
+    .ca-green  { border-top:2px solid var(--green); }
+    .ca-red    { border-top:2px solid var(--red); }
+    .ca-blue   { border-top:2px solid var(--blue); }
+    .ca-yellow { border-top:2px solid var(--yellow); }
+    .ca-purple { border-top:2px solid var(--purple); }
+    .card h2 {
+      font-size:10px; letter-spacing:1.5px; color:var(--muted);
+      text-transform:uppercase; margin-bottom:14px;
+      display:flex; align-items:center; justify-content:space-between;
+    }
+
+    /* ── Metric rows ── */
+    .metric { display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid var(--border); }
+    .metric:last-child { border-bottom:none; }
+    .metric-label { color:var(--muted); font-size:13px; }
+    .metric-value { font-weight:600; transition:color .3s; }
+
+    /* ── Big stat (Dry Run Stats card) ── */
+    .stats-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px; }
+    .stat-big { background:var(--bg3); border-radius:8px; padding:12px; text-align:center; }
+    .stat-big .num { font-size:28px; font-weight:700; line-height:1; margin-bottom:4px; }
+    .stat-big .lbl { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; }
+
+    /* ── Pills ── */
+    .pill { display:inline-block; padding:2px 9px; border-radius:5px; font-size:11px; font-weight:600; }
+    .pill.green  { background:rgba(16,185,129,.12);  color:var(--green); }
+    .pill.red    { background:rgba(239,68,68,.12);   color:var(--red); }
+    .pill.yellow { background:rgba(245,158,11,.12);  color:var(--yellow); }
+    .pill.blue   { background:rgba(59,130,246,.12);  color:var(--blue); }
+    .pill.purple { background:rgba(139,92,246,.12);  color:var(--purple); }
+    .pill.muted  { background:rgba(75,97,128,.12);   color:var(--muted); }
+
+    /* ── Buttons ── */
+    .btn { border:none; border-radius:6px; cursor:pointer; font-size:11px; font-weight:600; padding:5px 13px; transition:opacity .15s; }
+    .btn:hover { opacity:.82; }
+    .btn-blue   { background:var(--blue); color:#fff; }
+    .btn-yellow { background:rgba(245,158,11,.12); color:var(--yellow); border:1px solid rgba(245,158,11,.3); }
+    .btn-scan   { background:rgba(59,130,246,.1); color:var(--blue); border:1px solid rgba(59,130,246,.25); display:inline-flex; align-items:center; gap:5px; }
+    .spin-icon  { animation:spin .7s linear infinite; display:inline-block; }
+
+    /* ── Tables ── */
+    .tbl-row { animation:fadeUp .2s ease; }
+
+    /* ── Live dot ── */
+    .live-dot { width:6px; height:6px; border-radius:50%; background:var(--green); display:inline-block; animation:blink 1.4s infinite; margin-right:5px; vertical-align:middle; }
+
+    /* ── Empty state ── */
+    .empty { color:var(--muted); font-size:13px; padding:20px 0; text-align:center; }
+
+    /* ── Log ── */
+    #log { font-size:11.5px; font-family:ui-monospace,monospace; line-height:1.9; max-height:220px; overflow-y:auto; }
+    .log-line { display:flex; gap:10px; animation:slideIn .15s ease; }
+    .log-time { color:#2a3d55; flex-shrink:0; }
+    .log-scan  { color:var(--blue); }
+    .log-warn  { color:var(--yellow); }
+    .log-err   { color:var(--red); }
+    .log-good  { color:var(--green); }
+    .log-dim   { color:var(--muted); }
+
+    /* ── Hivemind sources ── */
+    .src-row { display:flex; align-items:center; gap:6px; padding:4px 0; border-bottom:1px solid var(--border); font-size:12px; }
+    .src-row:last-child { border-bottom:none; }
+    .src-name { width:110px; font-weight:600; }
+    .src-btn { margin-left:auto; font-size:10px; padding:1px 7px; border-radius:3px; cursor:pointer; }
+
+    /* ── CB alert bar ── */
+    #cb-alert { display:none; grid-column:1/-1; background:rgba(239,68,68,.08); border:1px solid rgba(239,68,68,.25); border-radius:8px; padding:12px 18px; color:var(--red); font-size:13px; font-weight:600; animation:fadeUp .3s; }
+
+    /* ── Login ── */
+    #login-overlay { position:fixed; inset:0; background:var(--bg); display:flex; align-items:center; justify-content:center; z-index:9999; }
+    #login-overlay.hidden { display:none; }
+    #login-box { background:var(--bg2); border:1px solid var(--border); border-radius:14px; padding:40px 48px; width:340px; text-align:center; }
+    #login-box img { margin-bottom:16px; }
+    #login-box h2 { font-size:18px; letter-spacing:3px; margin-bottom:6px; }
+    #login-box p { color:var(--muted); font-size:13px; margin-bottom:24px; }
+    #login-box input { width:100%; padding:11px 14px; background:var(--bg); border:1px solid var(--border); border-radius:7px; color:var(--text); font-size:14px; margin-bottom:12px; outline:none; transition:border-color .2s; }
+    #login-box input:focus { border-color:var(--blue); }
+    #login-box button { width:100%; padding:11px; background:var(--blue); border:none; border-radius:7px; color:#fff; font-size:14px; font-weight:600; cursor:pointer; transition:opacity .15s; }
+    #login-box button:hover { opacity:.88; }
+    #login-error { color:var(--red); font-size:12px; margin-top:10px; min-height:18px; }
   </style>
 </head>
 <body>
 
   <div id="login-overlay">
     <div id="login-box">
-      <img src="/logo.png" alt="Argus" style="width:40px;height:40px;object-fit:contain;margin-bottom:8px;"/>
+      <img src="/logo.png" alt="Argus" style="width:44px;height:44px;object-fit:contain;"/>
       <h2>ARGUS</h2>
       <p>Masukkan password untuk mengakses dashboard</p>
       <input type="password" id="login-pw" placeholder="Password" autofocus/>
@@ -91,25 +160,60 @@
 
   <header>
     <div id="status-dot"></div>
-    <img src="/logo.png" alt="Argus" style="width:28px;height:28px;object-fit:contain;"/>
+    <img src="/logo.png" alt="Argus" style="width:26px;height:26px;object-fit:contain;"/>
     <h1>ARGUS <span>v0.4.0</span></h1>
-    <div style="margin-left:auto; color: var(--muted); font-size: 12px;" id="ts">—</div>
+    <div id="ts">—</div>
   </header>
+
   <main>
-    <div class="card">
+    <!-- CB alert bar — only visible when circuit breaker is open -->
+    <div id="cb-alert">⛔ Circuit Breaker TERBUKA — <span id="cb-alert-reason"></span></div>
+
+    <!-- Row 1: 3 status cards -->
+    <div class="card ca-green">
       <h2>System Status</h2>
       <div class="metric"><span class="metric-label">Connection</span><span id="conn-status" class="pill muted">Connecting…</span></div>
       <div class="metric"><span class="metric-label">Uptime</span><span class="metric-value" id="uptime">—</span></div>
       <div class="metric"><span class="metric-label">Scheduler</span><span class="metric-value" id="sched-status">—</span></div>
     </div>
 
-    <div class="card">
+    <div class="card ca-red">
       <h2>Risk State</h2>
       <div class="metric"><span class="metric-label">Circuit Breaker</span><span id="cb-status" class="pill muted">—</span></div>
-      <div id="cb-reason-row" class="metric" style="display:none"><span class="metric-label">Reason</span><span class="metric-value" id="cb-reason" style="font-size:11px;color:var(--red)">—</span></div>
       <div class="metric"><span class="metric-label">Open Positions</span><span class="metric-value" id="open-count">—</span></div>
       <div class="metric"><span class="metric-label">Daily Loss</span><span class="metric-value" id="daily-loss">—</span></div>
-      <div class="metric"><span class="metric-label">Blacklisted Tokens</span><span class="metric-value" id="bl-count">—</span></div>
+      <div class="metric"><span class="metric-label">Blacklisted</span><span class="metric-value" id="bl-count">—</span></div>
+    </div>
+
+    <div class="card ca-purple">
+      <h2>Dry Run Performance</h2>
+      <div class="stats-grid">
+        <div class="stat-big">
+          <div class="num" id="dr-winrate" style="color:var(--green)">—</div>
+          <div class="lbl">Win Rate</div>
+        </div>
+        <div class="stat-big">
+          <div class="num" id="dr-avgpnl">—</div>
+          <div class="lbl">Avg P&L</div>
+        </div>
+      </div>
+      <div class="metric"><span class="metric-label">Open</span><span class="metric-value" id="dr-open">—</span></div>
+      <div class="metric"><span class="metric-label">Closed</span><span class="metric-value" id="dr-closed">—</span></div>
+    </div>
+
+    <!-- Row 2: 3 secondary cards -->
+    <div class="card ca-yellow">
+      <h2>Hivemind Discovery <button class="btn btn-yellow src-btn" onclick="runHivemind()">▶ Run</button></h2>
+      <div class="metric"><span class="metric-label">Smart Wallets</span><span class="metric-value" id="hv-count">—</span></div>
+      <div id="hv-sources" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card ca-blue">
+      <h2>Pattern Library</h2>
+      <div class="metric"><span class="metric-label">Active patterns</span><span class="metric-value" id="pl-active">—</span></div>
+      <div class="metric"><span class="metric-label">Total samples</span><span class="metric-value" id="pl-samples">—</span></div>
+      <div class="metric"><span class="metric-label">Best pattern</span><span class="metric-value" id="pl-best" style="font-size:12px">—</span></div>
+      <div class="metric"><span class="metric-label">Calibrating</span><span class="metric-value" id="pl-pending">—</span></div>
     </div>
 
     <div class="card">
@@ -120,60 +224,38 @@
       <div class="metric"><span class="metric-label">Followed Argus</span><span class="metric-value" id="wo-followed">—</span></div>
     </div>
 
-    <div class="card">
-      <h2>Hivemind Discovery
-        <button onclick="runHivemind()" style="float:right;background:rgba(255,200,0,.15);color:#f0b429;border:1px solid #f0b429;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:10px;">▶ Run Now</button>
+    <!-- Full-width sections -->
+    <div class="card full">
+      <h2>
+        Active Decisions
+        <button id="scan-btn" class="btn btn-scan" onclick="triggerScan()">▶ Scan Now</button>
       </h2>
-      <div class="metric"><span class="metric-label">Smart Wallets</span><span class="metric-value" id="hv-count">—</span></div>
-      <div id="hv-sources" style="margin-top:8px;font-size:11px;"></div>
+      <div id="decisions-table" class="empty">Menunggu scan pertama…</div>
     </div>
 
-    <div class="card">
-      <h2>Pattern Library</h2>
-      <div class="metric"><span class="metric-label">Active patterns</span><span class="metric-value" id="pl-active">—</span></div>
-      <div class="metric"><span class="metric-label">Total samples</span><span class="metric-value" id="pl-samples">—</span></div>
-      <div class="metric"><span class="metric-label">Best pattern</span><span class="metric-value" id="pl-best" style="font-size:11px">—</span></div>
-      <div class="metric"><span class="metric-label">Needs data (N&lt;20)</span><span class="metric-value" id="pl-pending">—</span></div>
-    </div>
-
-    <div class="card">
-      <h2>Dry Run Stats</h2>
-      <div class="metric"><span class="metric-label">Open Positions</span><span class="metric-value" id="dr-open">—</span></div>
-      <div class="metric"><span class="metric-label">Closed</span><span class="metric-value" id="dr-closed">—</span></div>
-      <div class="metric"><span class="metric-label">Win Rate</span><span class="metric-value" id="dr-winrate">—</span></div>
-      <div class="metric"><span class="metric-label">Avg P&amp;L</span><span class="metric-value" id="dr-avgpnl">—</span></div>
-    </div>
-
-    <div class="card" style="grid-column:1/-1;">
-      <h2>Active Decisions
-        <button id="scan-btn" onclick="triggerScan()" style="float:right;background:var(--blue);color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:11px;">▶ Scan Now</button>
-      </h2>
-      <div id="decisions-table" style="font-size:12px;color:var(--muted);line-height:2;">No decisions yet — waiting for first scan…</div>
-    </div>
-
-    <div class="card" style="grid-column:1/-1;">
+    <div class="card full">
       <h2>Dry Run Positions</h2>
-      <div id="dryrun-table" style="font-size:12px;color:var(--muted);">No dry run positions yet.</div>
+      <div id="dryrun-table" class="empty">Belum ada posisi.</div>
     </div>
 
-    <div class="card" style="grid-column:1/-1;">
-      <h2>Pattern Library <span id="pl-status" style="font-size:11px;color:var(--muted);font-weight:400"></span></h2>
-      <div id="pl-table" style="font-size:12px;color:var(--muted);">Belum ada data — Pattern Library mengumpulkan data dari setiap dry run yang selesai.</div>
+    <div class="card full">
+      <h2>Pattern Library <span id="pl-status" style="font-size:11px;color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none;"></span></h2>
+      <div id="pl-table" class="empty">Mengumpulkan data dari dry run…</div>
     </div>
 
-    <div class="card" style="grid-column:1/-1;">
+    <div class="card full">
       <h2>Smart Money Wallets (Hivemind)</h2>
-      <div id="hv-table" style="font-size:12px;color:var(--muted);">No wallets discovered yet — Hivemind runs every 6h automatically.</div>
+      <div id="hv-table" class="empty">Belum ada wallet — Hivemind berjalan otomatis setiap 6 jam.</div>
     </div>
 
-    <div class="card" style="grid-column:1/-1;">
+    <div class="card full">
       <h2>Wallet Actions</h2>
-      <div id="wallet-table" style="font-size:12px;color:var(--muted);">Wallet Observer disabled — set wallet.address in user-config.json.</div>
+      <div id="wallet-table" class="empty">Wallet Observer belum dikonfigurasi.</div>
     </div>
 
-    <div class="card" style="grid-column:1/-1;">
+    <div class="card full">
       <h2>Live Events</h2>
-      <div id="log" style="font-size:12px;font-family:monospace;color:var(--muted);line-height:1.8;">Waiting for WebSocket connection…</div>
+      <div id="log">Menunggu koneksi WebSocket…</div>
     </div>
   </main>
 
@@ -192,13 +274,9 @@
       const btn = document.getElementById('login-btn')
       const err = document.getElementById('login-error')
       if (!pw) return
-      btn.disabled = true
-      btn.textContent = 'Memverifikasi…'
+      btn.disabled = true; btn.textContent = 'Memverifikasi…'
       try {
-        const res = await apiFetch('/api/auth', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: pw })
-        })
+        const res = await fetch('/api/auth', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:pw}) })
         const data = await res.json()
         if (data.ok) {
           TOKEN = data.token
@@ -207,43 +285,55 @@
           initApp()
         } else {
           err.textContent = data.error || 'Password salah'
-          btn.disabled = false
-          btn.textContent = 'Masuk'
+          btn.disabled = false; btn.textContent = 'Masuk'
         }
-      } catch (e) {
+      } catch {
         err.textContent = 'Gagal terhubung ke server'
-        btn.disabled = false
-        btn.textContent = 'Masuk'
+        btn.disabled = false; btn.textContent = 'Masuk'
       }
     }
-
-    document.getElementById('login-pw').addEventListener('keydown', e => {
-      if (e.key === 'Enter') doLogin()
-    })
+    document.getElementById('login-pw').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin() })
 
     async function checkAuth() {
       try {
         const res = await apiFetch('/api/health')
-        if (res.status === 401) {
-          TOKEN = null; sessionStorage.removeItem('argus_token')
-          return // stay on login screen
-        }
+        if (res.status === 401) { TOKEN = null; sessionStorage.removeItem('argus_token'); return }
         document.getElementById('login-overlay').classList.add('hidden')
         initApp()
       } catch {
-        // Server unreachable — still show app (offline state)
         document.getElementById('login-overlay').classList.add('hidden')
         initApp()
       }
     }
 
     // ── App ───────────────────────────────────────────────────────────────────
+    const dot   = document.getElementById('status-dot')
     const logEl = document.getElementById('log')
-    const dot = document.getElementById('status-dot')
-    let ws, lines = []
+    let ws
 
-    const STRATEGY_COLOR = { spot: 'green', bid_ask: 'yellow', limit_order: 'blue' }
+    const STRATEGY_COLOR = { spot:'green', bid_ask:'yellow', limit_order:'blue' }
 
+    // ── Live clock ────────────────────────────────────────────────────────────
+    function tickClock() {
+      document.getElementById('ts').textContent = new Date().toLocaleString('id-ID', {hour:'2-digit',minute:'2-digit',second:'2-digit',day:'2-digit',month:'2-digit',year:'numeric'})
+    }
+    setInterval(tickClock, 1000)
+    tickClock()
+
+    // ── Log ───────────────────────────────────────────────────────────────────
+    const LOG_CLASS = {
+      scan: /scan|decision|kandidat/i,
+      warn: /blocked|paused|fail|disconnect|error/i,
+      err:  /circuit breaker|OPEN|error/i,
+      good: /connected|selesai|discovered|aktif|outcome/i,
+    }
+    function logClass(text) {
+      if (LOG_CLASS.err.test(text))  return 'log-err'
+      if (LOG_CLASS.warn.test(text)) return 'log-warn'
+      if (LOG_CLASS.good.test(text)) return 'log-good'
+      if (LOG_CLASS.scan.test(text)) return 'log-scan'
+      return 'log-dim'
+    }
     function formatEvent(msg) {
       try {
         const m = typeof msg === 'string' ? JSON.parse(msg) : msg
@@ -254,125 +344,132 @@
         if (t === 'scan_error') return `Scan error · ${m.error}`
         if (t === 'recommendation_expired') return `Decision expired · ${m.token_symbol || m.pool_address?.slice(0,8)}`
         if (t === 'risk_gate_blocked') return `Risk gate blocked · ${m.reason || '—'}`
-        if (t === 'wallet_action_detected') return `Wallet action · ${m.action_type} ${m.token_symbol || ''}`
+        if (t === 'wallet_action_detected') return `Wallet action · ${(m.action_type||'').replace(/_/g,' ')} ${m.token_symbol || ''}`
         if (t === 'tracked_wallets_updated') return `Hivemind · ${m.discovered ?? '?'} wallet baru ditemukan`
-        if (t === 'outcome_recorded') return `Outcome · ${m.strategy} pnl=${m.net_pnl_pct?.toFixed?.(2) ?? '?'}% win=${m.win}`
+        if (t === 'outcome_recorded') return `Outcome recorded · ${m.strategy} pnl=${m.net_pnl_pct?.toFixed?.(2) ?? '?'}% win=${m.win}`
         if (t === 'dry_run_closed') return `Dry run closed · ${m.token_symbol || ''} ${m.net_pnl_pct != null ? (m.net_pnl_pct >= 0 ? '+' : '') + m.net_pnl_pct.toFixed(2) + '%' : ''}`
-        if (t === 'argus_signal') return `Argus signal · ${m.signal?.token_symbol || ''} ${m.signal?.recommended ? '✓' : '✗'}`
+        if (t === 'argus_signal') return `Argus signal · ${m.signal?.token_symbol || ''} ${m.signal?.recommended ? '✓ recommended' : '✗ not recommended'}`
         if (t === 'pong') return null
         return `${t}${m.token_symbol ? ' · ' + m.token_symbol : ''}`
-      } catch {
-        return msg
-      }
+      } catch { return typeof msg === 'string' ? msg : null }
     }
-
     function addLog(msg) {
       const t = new Date().toLocaleTimeString('id-ID')
-      const label = formatEvent(msg)
-      if (label === null) return
-      lines.unshift(`[${t}] ${label}`)
-      if (lines.length > 40) lines.pop()
-      logEl.textContent = lines.join('\n')
+      const text = formatEvent(msg)
+      if (!text) return
+      const cls = logClass(text)
+      const line = document.createElement('div')
+      line.className = 'log-line'
+      line.innerHTML = `<span class="log-time">[${t}]</span><span class="${cls}">${text}</span>`
+      if (logEl.firstChild) logEl.insertBefore(line, logEl.firstChild)
+      else logEl.appendChild(line)
+      if (logEl.children.length > 40) logEl.removeChild(logEl.lastChild)
     }
 
+    // ── Risk ──────────────────────────────────────────────────────────────────
     function updateRisk(risk) {
+      if (!risk) return
       const cb = document.getElementById('cb-status')
-      cb.textContent = risk.circuit_breaker_open ? 'OPEN' : 'clear'
-      cb.className = 'pill ' + (risk.circuit_breaker_open ? 'red' : 'green')
-      const reasonRow = document.getElementById('cb-reason-row')
-      if (risk.circuit_breaker_open && risk.circuit_breaker_reason) {
-        document.getElementById('cb-reason').textContent = risk.circuit_breaker_reason
-        reasonRow.style.display = ''
+      const isOpen = risk.circuit_breaker_open
+      cb.textContent = isOpen ? 'OPEN' : 'clear'
+      cb.className = 'pill ' + (isOpen ? 'red' : 'green')
+
+      const alert = document.getElementById('cb-alert')
+      if (isOpen) {
+        alert.style.display = 'block'
+        document.getElementById('cb-alert-reason').textContent = risk.circuit_breaker_reason || '—'
       } else {
-        reasonRow.style.display = 'none'
+        alert.style.display = 'none'
       }
-      document.getElementById('open-count').textContent =
-        `${risk.current_open_count} / ${risk.limits?.max_open_positions || 5}`
-      document.getElementById('daily-loss').textContent =
-        `$${(risk.daily_realized_loss_usd || 0).toFixed(2)} / $${risk.limits?.max_daily_loss_usd || 50}`
+      document.getElementById('open-count').textContent = `${risk.current_open_count} / ${risk.limits?.max_open_positions || 5}`
+      document.getElementById('daily-loss').textContent = `$${(risk.daily_realized_loss_usd || 0).toFixed(2)} / $${risk.limits?.max_daily_loss_usd || 50}`
       document.getElementById('bl-count').textContent = (risk.blacklisted_tokens || []).length
     }
 
-    function refreshRisk() {
-      apiFetch('/api/risk').then(r => r.json()).then(updateRisk).catch(() => {})
-    }
-
+    // ── Dry Run ───────────────────────────────────────────────────────────────
     function loadDryRun() {
-      apiFetch('/api/dry-run?limit=15').then(r => r.json()).then(d => {
+      apiFetch('/api/dry-run?limit=20').then(r => r.json()).then(d => {
         const s = d.stats || {}
-        document.getElementById('dr-open').textContent = s.open_positions ?? '0'
-        document.getElementById('dr-closed').textContent = s.total_closed ?? '0'
-        document.getElementById('dr-winrate').textContent = s.win_rate != null ? s.win_rate + '%' : '—'
+        const wr = s.win_rate
+        const wrEl = document.getElementById('dr-winrate')
+        wrEl.textContent = wr != null ? wr + '%' : '—'
+        wrEl.style.color = wr >= 60 ? 'var(--green)' : wr >= 40 ? 'var(--yellow)' : wr != null ? 'var(--red)' : ''
+
         const avgPnl = s.avg_pnl_pct
         const avgEl = document.getElementById('dr-avgpnl')
         avgEl.textContent = avgPnl != null ? (avgPnl >= 0 ? '+' : '') + avgPnl + '%' : '—'
         avgEl.style.color = avgPnl > 0 ? 'var(--green)' : avgPnl < 0 ? 'var(--red)' : ''
 
+        document.getElementById('dr-open').textContent = s.open_positions ?? '0'
+        document.getElementById('dr-closed').textContent = s.total_closed ?? '0'
+
         const el = document.getElementById('dryrun-table')
-        if (!d.positions || !d.positions.length) {
-          el.textContent = 'No dry run positions yet.'
-          return
-        }
-        const rows = d.positions.slice(0, 10).map(p => {
+        if (!d.positions?.length) { el.innerHTML = '<div class="empty">Belum ada posisi.</div>'; return }
+        const COLS = '110px 90px 80px 70px 1fr'
+        const rows = d.positions.slice(0, 15).map(p => {
           const isOpen = p.status === 'open'
           const pnl = isOpen ? null : p.net_pnl_pct
-          const pnlStr = pnl != null ? `<span style="color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'};">${pnl >= 0 ? '+' : ''}${pnl}%</span>` : '<span style="color:var(--muted)">live…</span>'
+          const pnlStr = pnl != null
+            ? `<span style="font-weight:600;color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'}">${pnl >= 0 ? '+' : ''}${pnl}%</span>`
+            : `<span style="color:var(--muted)"><span class="live-dot"></span>live</span>`
           const holdStr = p.hold_minutes != null ? p.hold_minutes + 'm' : '—'
           const stratColor = STRATEGY_COLOR[p.strategy] || 'muted'
           const dexLink = p.token_mint
-            ? `<a href="https://dexscreener.com/solana/${p.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none;">${p.token_symbol || p.token_mint.slice(0,8)}</a>`
-            : (p.token_symbol || '?')
-          return `<div style="display:grid;grid-template-columns:100px 100px 70px 70px 1fr;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)">` +
+            ? `<a href="https://dexscreener.com/solana/${p.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">${p.token_symbol || p.token_mint.slice(0,8)}</a>`
+            : `<span style="font-weight:600">${p.token_symbol || '?'}</span>`
+          const statusEl = isOpen
+            ? `<span style="color:var(--green);font-size:11px">open</span>`
+            : `<span style="color:var(--muted);font-size:11px">${p.status}</span>`
+          return `<div class="tbl-row" style="display:grid;grid-template-columns:${COLS};gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">` +
             `<span>${dexLink}</span>` +
             `<span><span class="pill ${stratColor}">${p.strategy}</span></span>` +
             `<span>${pnlStr}</span>` +
             `<span style="color:var(--muted)">${holdStr}</span>` +
-            `<span style="color:var(--muted);font-size:11px">${isOpen ? '🟢 open' : p.status}</span>` +
+            `<span>${statusEl}</span>` +
             `</div>`
         }).join('')
-        el.innerHTML = `<div style="display:grid;grid-template-columns:100px 100px 70px 70px 1fr;gap:8px;padding:0 0 6px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Token</span><span>Strategy</span><span>Net P&L</span><span>Hold</span><span>Status</span></div>${rows}`
+        el.innerHTML = `<div style="display:grid;grid-template-columns:${COLS};gap:10px;padding:0 0 7px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Token</span><span>Strategy</span><span>Net P&L</span><span>Hold</span><span>Status</span></div>${rows}`
       }).catch(() => {})
     }
 
+    // ── Decisions ─────────────────────────────────────────────────────────────
     function loadDecisions() {
       apiFetch('/api/candidates?limit=20&status=active').then(r => r.json()).then(d => {
         const el = document.getElementById('decisions-table')
-        if (!d.decisions || d.decisions.length === 0) {
-          el.textContent = 'No active decisions — trigger a scan or wait for next cycle (every 15min).'
-          return
-        }
+        if (!d.decisions?.length) { el.innerHTML = '<div class="empty">Belum ada decision aktif — scan akan berjalan otomatis setiap 15 menit.</div>'; return }
+        const COLS = '110px 90px 80px 1fr 70px'
         const rows = d.decisions.map(dec => {
           const ind = dec.indicators || {}
           const volStr = ind.volatility != null ? `vol ${parseFloat(ind.volatility).toFixed(2)}` : '—'
           const feeTvlStr = ind.fee_active_tvl_ratio != null ? `${(ind.fee_active_tvl_ratio*100).toFixed(1)}% fee/tvl` : '—'
           const condLabel = (dec.condition_bucket || '').replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase())
           const color = STRATEGY_COLOR[dec.strategy] || 'muted'
-          const pct = Math.min(100, Math.round((dec.confidence || 0) * 100))
-          const exp = new Date(dec.expires_at).toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' })
+          const exp = new Date(dec.expires_at).toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'})
           const dexLink = dec.token_mint
-            ? `<a href="https://dexscreener.com/solana/${dec.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none;" title="DexScreener">${dec.token_symbol || dec.token_mint.slice(0,8)}</a>`
-            : (dec.token_symbol || '?')
-          const verdictHtml = dec.llm_verdict
-            ? `<div id="verdict-${dec.id}" style="font-size:11px;color:var(--muted);padding:3px 0 6px;border-bottom:1px solid var(--border);font-style:italic">${dec.llm_verdict}</div>`
+            ? `<a href="https://dexscreener.com/solana/${dec.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">${dec.token_symbol || dec.token_mint.slice(0,8)}</a>`
+            : `<span style="font-weight:600">${dec.token_symbol || '?'}</span>`
+          const verdict = dec.llm_verdict
+            ? `<div id="verdict-${dec.id}" style="font-size:11px;color:var(--muted);padding:2px 0 6px;font-style:italic;border-bottom:1px solid var(--border)">"${dec.llm_verdict}"</div>`
             : `<div id="verdict-${dec.id}"></div>`
-          return `<div style="display:grid;grid-template-columns:100px 90px 80px 1fr 60px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);">` +
+          return `<div class="tbl-row" style="display:grid;grid-template-columns:${COLS};gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);">` +
             `<span>${dexLink}</span>` +
             `<span><span class="pill ${color}">${dec.strategy}</span></span>` +
-            `<span style="color:var(--muted)">${volStr}</span>` +
-            `<span style="color:var(--muted);font-size:11px">${feeTvlStr} · ${condLabel}</span>` +
+            `<span style="color:var(--muted);font-size:12px">${volStr}</span>` +
+            `<span style="color:var(--muted);font-size:12px">${feeTvlStr} · ${condLabel}</span>` +
             `<span style="color:var(--muted);font-size:11px;text-align:right">exp ${exp}</span>` +
-            `</div>` + verdictHtml
+            `</div>` + verdict
         }).join('')
-        el.innerHTML = `<div style="display:grid;grid-template-columns:100px 90px 80px 1fr 60px;gap:8px;padding:0 0 6px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Token</span><span>Strategy</span><span>Vol</span><span>Condition</span><span style="text-align:right">Expires</span></div>${rows}`
+        el.innerHTML = `<div style="display:grid;grid-template-columns:${COLS};gap:10px;padding:0 0 7px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Token</span><span>Strategy</span><span>Vol</span><span>Condition</span><span style="text-align:right">Expires</span></div>${rows}`
       }).catch(() => {})
     }
 
+    // ── Pattern Library ───────────────────────────────────────────────────────
     function loadPatternLibrary() {
       apiFetch('/api/pattern-library').then(r => r.json()).then(d => {
         const patterns = d.patterns || []
-        const active   = patterns.filter(p => p.active)
-        const total    = patterns.reduce((s, p) => s + (p.sample_count || 0), 0)
-        const pending  = patterns.filter(p => !p.active)
+        const active  = patterns.filter(p => p.active)
+        const pending = patterns.filter(p => !p.active)
+        const total   = patterns.reduce((s, p) => s + (p.sample_count || 0), 0)
         document.getElementById('pl-active').textContent  = active.length
         document.getElementById('pl-samples').textContent = total
         document.getElementById('pl-pending').textContent = pending.length
@@ -380,50 +477,31 @@
         document.getElementById('pl-best').textContent = best
           ? `${best.volatility_bucket}×${best.regime}×${best.strategy} (${(best.win_rate*100).toFixed(0)}%)`
           : '—'
-
-        // Detail table
+        const statusEl = document.getElementById('pl-status')
         const el = document.getElementById('pl-table')
-        const status = document.getElementById('pl-status')
-        if (!patterns.length) {
-          el.textContent = 'Belum ada data — Pattern Library mengumpulkan data dari setiap dry run yang selesai.'
-          status.textContent = ''
-          return
-        }
-        status.textContent = `${active.length} aktif · ${pending.length} calibrating · ${total} samples`
+        if (!patterns.length) { el.innerHTML = '<div class="empty">Mengumpulkan data dari dry run…</div>'; statusEl.textContent = ''; return }
+        statusEl.textContent = `${active.length} aktif · ${pending.length} calibrating · ${total} samples`
         const COLS = '120px 100px 100px 70px 80px 80px 70px'
-        const header = `<div style="display:grid;grid-template-columns:${COLS};gap:8px;padding:0 0 6px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">
-          <span>Bucket</span><span>Regime</span><span>Strategy</span><span>Samples</span><span>Win Rate</span><span>Avg P&L</span><span>Status</span></div>`
+        const header = `<div style="display:grid;grid-template-columns:${COLS};gap:8px;padding:0 0 7px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Bucket</span><span>Regime</span><span>Strategy</span><span>Samples</span><span>Win Rate</span><span>Avg P&L</span><span>Status</span></div>`
         const rows = patterns.map(p => {
-          const wr   = p.win_rate != null ? `${(p.win_rate*100).toFixed(0)}%` : '—'
-          const pnl  = p.mean_pnl_net != null ? `${p.mean_pnl_net >= 0 ? '+' : ''}${p.mean_pnl_net.toFixed(1)}%` : '—'
-          const wrColor = p.active ? (p.win_rate > 0.6 ? 'var(--green)' : p.win_rate < 0.4 ? 'var(--red)' : '') : 'var(--muted)'
+          const wr  = p.win_rate != null ? `${(p.win_rate*100).toFixed(0)}%` : '—'
+          const pnl = p.mean_pnl_net != null ? `${p.mean_pnl_net >= 0 ? '+' : ''}${p.mean_pnl_net.toFixed(1)}%` : '—'
+          const wrColor  = p.active ? (p.win_rate > 0.6 ? 'var(--green)' : p.win_rate < 0.4 ? 'var(--red)' : '') : 'var(--muted)'
           const pnlColor = p.mean_pnl_net > 0 ? 'var(--green)' : p.mean_pnl_net < 0 ? 'var(--red)' : ''
-          const pill = p.active
-            ? `<span class="pill green" style="font-size:10px">aktif</span>`
-            : `<span class="pill muted" style="font-size:10px">N=${p.sample_count}/20</span>`
-          const stratColor = STRATEGY_COLOR[p.strategy] || 'muted'
-          return `<div style="display:grid;grid-template-columns:${COLS};gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)">
-            <span style="font-size:11px">${p.volatility_bucket}</span>
-            <span style="font-size:11px">${p.regime}</span>
-            <span><span class="pill ${stratColor}" style="font-size:10px">${p.strategy}</span></span>
-            <span>${p.sample_count}</span>
-            <span style="color:${wrColor};font-weight:600">${wr}</span>
-            <span style="color:${pnlColor}">${pnl}</span>
-            <span>${pill}</span>
-          </div>`
+          const pill = p.active ? `<span class="pill green" style="font-size:10px">aktif</span>` : `<span class="pill muted" style="font-size:10px">N=${p.sample_count}/20</span>`
+          return `<div class="tbl-row" style="display:grid;grid-template-columns:${COLS};gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)"><span style="font-size:12px">${p.volatility_bucket}</span><span style="font-size:12px">${p.regime}</span><span><span class="pill ${STRATEGY_COLOR[p.strategy]||'muted'}" style="font-size:10px">${p.strategy}</span></span><span>${p.sample_count}</span><span style="color:${wrColor};font-weight:600">${wr}</span><span style="color:${pnlColor}">${pnl}</span><span>${pill}</span></div>`
         }).join('')
         el.innerHTML = header + rows
       }).catch(() => {})
     }
 
+    // ── Wallet Actions ────────────────────────────────────────────────────────
     function loadWalletActions() {
       apiFetch('/api/wallet-actions?limit=20').then(r => r.json()).then(d => {
         const st = d.status || {}
         const woEl = document.getElementById('wo-status')
         woEl.textContent = st.active ? 'Active' : 'Inactive'
         woEl.className = 'pill ' + (st.active ? 'green' : 'muted')
-
-        // Wallet summary: "1 own · 2 smart money" or "Not configured"
         const wallets = st.wallets || []
         if (wallets.length) {
           const own = wallets.filter(w => w.type === 'own').length
@@ -432,130 +510,82 @@
           if (own) parts.push(`${own} own`)
           if (sm)  parts.push(`${sm} smart money`)
           document.getElementById('wo-addr').textContent = parts.join(' · ') || 'None'
-        } else {
-          document.getElementById('wo-addr').textContent = 'Not configured'
-        }
-
+        } else { document.getElementById('wo-addr').textContent = 'Not configured' }
         const today = new Date().toISOString().slice(0, 10)
         const todayActions = (d.actions || []).filter(a => a.detected_at?.startsWith(today))
         const followed = todayActions.filter(a => a.match_category === 'followed' && a.wallet_type === 'own')
         document.getElementById('wo-count').textContent = todayActions.length
         document.getElementById('wo-followed').textContent = followed.length
-
         const el = document.getElementById('wallet-table')
         if (!wallets.length) return
-        if (!d.actions?.length) {
-          el.textContent = 'No on-chain actions detected yet.'
-          return
-        }
-        const ACTION_ICON = {
-          add_liquidity: '↑', remove_liquidity: '↓', claim_fees: '$',
-          open_position: '+', close_position: '×',
-        }
+        if (!d.actions?.length) { el.innerHTML = '<div class="empty">Belum ada aksi on-chain.</div>'; return }
+        const ACTION_ICON = { add_liquidity:'↑', remove_liquidity:'↓', claim_fees:'$', open_position:'+', close_position:'×' }
+        const COLS = '45px 100px 90px 100px 80px 1fr'
         const rows = d.actions.slice(0, 20).map(a => {
-          const ts = new Date(a.detected_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+          const ts = new Date(a.detected_at).toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'})
           const icon = ACTION_ICON[a.action_type] || '?'
-          const matchPill = a.match_category === 'followed'
-            ? `<span class="pill green">followed</span>`
-            : `<span class="pill muted">own</span>`
+          const matchPill = a.match_category === 'followed' ? `<span class="pill green">followed</span>` : `<span class="pill muted">own</span>`
           const walletPill = a.wallet_type === 'smart_money'
-            ? `<span class="pill" style="background:rgba(255,200,0,.15);color:#f0b429">${a.wallet_label || '🐋'}</span>`
-            : `<span class="pill" style="background:rgba(59,130,246,.1);color:var(--blue)">${a.wallet_label || 'own'}</span>`
-          const poolStr = a.pool_address ? a.pool_address.slice(0, 8) + '…' : '—'
+            ? `<span class="pill yellow">${a.wallet_label || 'whale'}</span>`
+            : `<span class="pill blue">${a.wallet_label || 'own'}</span>`
           const tokStr = a.token_mint
-            ? `<a href="https://dexscreener.com/solana/${a.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none;">${a.token_symbol || a.token_mint.slice(0, 8)}</a>`
-            : (a.token_symbol || poolStr)
-          return `<div style="display:grid;grid-template-columns:40px 90px 80px 90px 90px 1fr;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)">` +
-            `<span style="color:var(--muted)">${ts}</span>` +
-            `<span>${icon} ${(a.action_type || '').replace(/_/g,' ')}</span>` +
-            `<span>${tokStr}</span>` +
-            `<span>${walletPill}</span>` +
-            `<span>${matchPill}</span>` +
-            `<span style="color:var(--muted);font-size:11px">${a.strategy || '—'}</span>` +
-            `</div>`
+            ? `<a href="https://dexscreener.com/solana/${a.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none">${a.token_symbol || a.token_mint.slice(0,8)}</a>`
+            : (a.token_symbol || a.pool_address?.slice(0,8) || '—')
+          return `<div class="tbl-row" style="display:grid;grid-template-columns:${COLS};gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)"><span style="color:var(--muted)">${ts}</span><span>${icon} ${(a.action_type||'').replace(/_/g,' ')}</span><span>${tokStr}</span><span>${walletPill}</span><span>${matchPill}</span><span style="color:var(--muted);font-size:11px">${a.strategy||'—'}</span></div>`
         }).join('')
-        el.innerHTML = `<div style="display:grid;grid-template-columns:40px 90px 80px 90px 90px 1fr;gap:8px;padding:0 0 6px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Time</span><span>Action</span><span>Token</span><span>Wallet</span><span>Match</span><span>Strategy</span></div>${rows}`
+        el.innerHTML = `<div style="display:grid;grid-template-columns:${COLS};gap:8px;padding:0 0 7px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Time</span><span>Action</span><span>Token</span><span>Wallet</span><span>Match</span><span>Strategy</span></div>${rows}`
       }).catch(() => {})
     }
 
+    // ── Hivemind ──────────────────────────────────────────────────────────────
     function loadHivemind() {
       apiFetch('/api/hivemind').then(r => r.json()).then(d => {
         document.getElementById('hv-count').textContent = d.wallet_count ?? '—'
-
-        const STATE_STYLE = {
-          ready:    'color:var(--green)',
-          cooldown: 'color:var(--muted)',
-          paused:   'color:#f0b429',
-          error:    'color:var(--red)',
-        }
-        const sourcesHtml = (d.sources || []).map(s => {
+        const STATE_COLOR = { ready:'var(--green)', cooldown:'var(--muted)', paused:'var(--yellow)', error:'var(--red)' }
+        const html = (d.sources || []).map(s => {
           const stateLabel = s.state === 'ready' ? 'ready'
-            : s.state === 'cooldown' ? `cooldown (${s.detail})`
-            : s.state === 'paused'   ? `paused (${s.detail})`
-            : s.state
-          const style = STATE_STYLE[s.state] || ''
-          const fails = s.failure_count > 0 ? ` · ${s.failure_count} fail${s.failure_count > 1 ? 's' : ''}` : ''
+            : s.state === 'cooldown' ? `cooldown (${s.detail})` : s.state === 'paused' ? `paused` : s.state
+          const fails = s.failure_count > 0 ? ` · ${s.failure_count} fail` : ''
           const pauseBtn = s.state !== 'paused'
-            ? `<button onclick="sourcePause('${s.source}')" style="margin-left:8px;font-size:10px;padding:1px 6px;border:1px solid var(--border);background:transparent;color:var(--muted);border-radius:3px;cursor:pointer;">pause</button>`
-            : `<button onclick="sourceResume('${s.source}')" style="margin-left:8px;font-size:10px;padding:1px 6px;border:1px solid #f0b429;background:transparent;color:#f0b429;border-radius:3px;cursor:pointer;">resume</button>`
-          return `<div style="display:flex;align-items:center;gap:4px;padding:3px 0;border-bottom:1px solid var(--border)">` +
-            `<span style="width:70px;font-weight:600">${s.source}</span>` +
-            `<span style="${style}">${stateLabel}${fails}</span>` +
-            pauseBtn + `</div>`
+            ? `<button class="btn src-btn" onclick="sourcePause('${s.source}')" style="color:var(--muted);border:1px solid var(--border);background:transparent;">pause</button>`
+            : `<button class="btn src-btn" onclick="sourceResume('${s.source}')" style="color:var(--yellow);border:1px solid rgba(245,158,11,.3);background:transparent;">resume</button>`
+          return `<div class="src-row"><span class="src-name" style="color:var(--text)">${s.source}</span><span style="color:${STATE_COLOR[s.state]||'var(--muted)'};">${stateLabel}${fails}</span>${pauseBtn}</div>`
         }).join('')
-        document.getElementById('hv-sources').innerHTML = sourcesHtml || '<span style="color:var(--muted)">No sources configured</span>'
+        document.getElementById('hv-sources').innerHTML = html || '<span style="color:var(--muted);font-size:12px">No sources</span>'
       }).catch(() => {})
-
       apiFetch('/api/hivemind/wallets').then(r => r.json()).then(d => {
         const el = document.getElementById('hv-table')
         if (!d.wallets?.length) return
+        const COLS = '130px 120px 80px 70px 1fr'
         const rows = d.wallets.map(w => {
-          const src  = `<span class="pill muted" style="font-size:10px">${w.source}</span>`
-          const hits = `<span style="color:var(--blue)">${w.pool_hits} pool${w.pool_hits !== 1 ? 's' : ''}</span>`
-          const ts   = w.discovered_at ? new Date(w.discovered_at).toLocaleDateString('id-ID') : '—'
-          const active = w.active
-            ? `<span class="pill green" style="font-size:10px">active</span>`
-            : `<span class="pill muted" style="font-size:10px">inactive</span>`
-          return `<div style="display:grid;grid-template-columns:120px 110px 80px 70px 1fr;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)">` +
-            `<span style="font-family:monospace;font-size:11px">${w.address.slice(0, 10)}…</span>` +
-            `<span>${w.label || '—'}</span>` +
-            `<span>${src}</span>` +
-            `<span>${hits}</span>` +
-            `<span style="color:var(--muted);font-size:10px">${ts}</span>` +
-            `</div>`
+          const ts = w.discovered_at ? new Date(w.discovered_at).toLocaleDateString('id-ID') : '—'
+          const active = w.active ? `<span class="pill green" style="font-size:10px">active</span>` : `<span class="pill muted" style="font-size:10px">inactive</span>`
+          return `<div class="tbl-row" style="display:grid;grid-template-columns:${COLS};gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)"><span style="font-family:monospace;font-size:11px">${w.address.slice(0,10)}…</span><span>${w.label||'—'}</span><span class="pill muted" style="font-size:10px">${w.source}</span><span style="color:var(--blue)">${w.pool_hits} pools</span><span style="color:var(--muted);font-size:11px">${ts}</span></div>`
         }).join('')
-        el.innerHTML = `<div style="display:grid;grid-template-columns:120px 110px 80px 70px 1fr;gap:8px;padding:0 0 5px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Address</span><span>Label</span><span>Source</span><span>Pools</span><span>Discovered</span></div>${rows}`
+        el.innerHTML = `<div style="display:grid;grid-template-columns:${COLS};gap:8px;padding:0 0 7px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Address</span><span>Label</span><span>Source</span><span>Pools</span><span>Discovered</span></div>${rows}`
       }).catch(() => {})
     }
 
     function runHivemind() {
-      apiFetch('/api/hivemind/run', { method: 'POST' })
-        .then(r => r.json())
-        .then(() => { addLog('Hivemind discovery started — check logs'); setTimeout(loadHivemind, 5000) })
-        .catch(e => addLog('Hivemind run failed: ' + e.message))
+      apiFetch('/api/hivemind/run', { method:'POST' }).then(() => { addLog({type:'tracked_wallets_updated',discovered:'?'}); setTimeout(loadHivemind, 5000) }).catch(() => {})
     }
-
     function sourcePause(name) {
-      fetch(`/api/hivemind/source/${name}/pause`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' })
-        .then(() => loadHivemind())
+      apiFetch(`/api/hivemind/source/${name}/pause`, { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).then(() => loadHivemind())
     }
-
     function sourceResume(name) {
-      fetch(`/api/hivemind/source/${name}/resume`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' })
-        .then(() => loadHivemind())
+      apiFetch(`/api/hivemind/source/${name}/resume`, { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).then(() => loadHivemind())
     }
 
+    // ── Scan ──────────────────────────────────────────────────────────────────
     function triggerScan() {
       const btn = document.getElementById('scan-btn')
-      btn.textContent = '⏳ Scanning…'
+      btn.innerHTML = '<span class="spin-icon">↻</span> Scanning…'
       btn.disabled = true
-      apiFetch('/api/scan/run', { method: 'POST' })
-        .then(r => r.json())
-        .then(d => addLog('Manual scan triggered — results via WebSocket'))
-        .catch(e => addLog('Scan trigger failed: ' + e.message))
-        .finally(() => { setTimeout(() => { btn.textContent = '▶ Scan Now'; btn.disabled = false }, 3000) })
+      apiFetch('/api/scan/run', { method:'POST' }).catch(() => {})
+      setTimeout(() => { btn.innerHTML = '▶ Scan Now'; btn.disabled = false }, 5000)
     }
 
+    // ── WebSocket ─────────────────────────────────────────────────────────────
     function connect() {
       const tokenParam = TOKEN ? `?token=${TOKEN}` : ''
       ws = new WebSocket(`ws://${location.host}${tokenParam}`)
@@ -563,29 +593,23 @@
         dot.className = 'online'
         document.getElementById('conn-status').textContent = 'Connected'
         document.getElementById('conn-status').className = 'pill green'
-        addLog('WebSocket connected')
         apiFetch('/api/health').then(r => r.json()).then(d => {
           document.getElementById('uptime').textContent = Math.floor(d.uptime) + 's'
           document.getElementById('sched-status').textContent = d.scheduler.length + ' jobs'
-          document.getElementById('ts').textContent = new Date(d.ts).toLocaleString('id-ID')
         })
-        loadDecisions()
-        loadDryRun()
-        loadWalletActions()
-        loadPatternLibrary()
-        loadHivemind()
+        loadDecisions(); loadDryRun(); loadWalletActions(); loadPatternLibrary(); loadHivemind()
       }
       ws.onmessage = ({ data }) => {
         const msg = JSON.parse(data)
         if (msg.type === 'init' || msg.type === 'risk_update') updateRisk(msg.risk)
-        if (msg.type === 'risk_gate_blocked') { refreshRisk(); addLog(`⛔ ${msg.reason || 'Risk gate blocked'}`) }
-        if (msg.type === 'scan_result' || msg.type === 'recommendation_expired') { loadDecisions(); loadDryRun() }
+        if (msg.type === 'risk_gate_blocked') apiFetch('/api/risk').then(r => r.json()).then(updateRisk).catch(() => {})
+        if (msg.type === 'scan_result' || msg.type === 'recommendation_expired' || msg.type === 'scan_complete') { loadDecisions(); loadDryRun() }
         if (msg.type === 'dry_run_closed') loadDryRun()
-        if (msg.type === 'wallet_action_detected' || msg.type === 'wallet_action') loadWalletActions()
-        if (msg.type === 'tracked_wallets_updated') { loadHivemind(); loadWalletActions(); addLog(`🐋 Hivemind: ${msg.discovered || '?'} new smart money wallet(s) discovered`) }
+        if (msg.type === 'wallet_action_detected') loadWalletActions()
+        if (msg.type === 'tracked_wallets_updated') { loadHivemind(); loadWalletActions() }
         if (msg.type === 'verdict_ready') {
           const el = document.getElementById(`verdict-${msg.decision_id}`)
-          if (el) { el.textContent = msg.verdict; el.style.fontStyle = 'italic'; el.style.color = 'var(--muted)' }
+          if (el) { el.textContent = `"${msg.verdict}"`; el.style.fontStyle = 'italic'; el.style.color = 'var(--muted)' }
           else loadDecisions()
         }
         if (msg.type === 'outcome_recorded') loadPatternLibrary()
@@ -595,13 +619,17 @@
         dot.className = 'offline'
         document.getElementById('conn-status').textContent = 'Disconnected'
         document.getElementById('conn-status').className = 'pill red'
-        addLog('Disconnected — reconnecting in 3s…')
+        addLog({ type: 'disconnect' })
         setTimeout(connect, 3000)
       }
     }
 
     function initApp() {
-      setInterval(() => ws?.readyState === 1 && ws.send(JSON.stringify({ type: 'ping' })), 30000)
+      setInterval(() => ws?.readyState === 1 && ws.send(JSON.stringify({ type:'ping' })), 30000)
+      setInterval(() => {
+        const u = document.getElementById('uptime')
+        if (u.textContent !== '—') u.textContent = (parseInt(u.textContent) + 1) + 's'
+      }, 1000)
       connect()
     }
 
