@@ -2,6 +2,7 @@
 const db = require('./database')
 
 function initSchema() {
+  db.transaction(() => {
   db.exec(`
     -- ── decisions ─────────────────────────────────────────────────────────────
     -- Every recommendation Argus makes — dry run or real.
@@ -144,6 +145,7 @@ function initSchema() {
 
     CREATE INDEX IF NOT EXISTS idx_tracked_wallets_active ON tracked_wallets(active);
   `)
+  })()
 
   migrateSchema()
   console.log('[Schema] ✓ Database schema ready')
@@ -159,12 +161,19 @@ function migrateSchema() {
   let added = 0
   for (const sql of cols) {
     try { db.exec(sql); added++ } catch (e) {
-      if (!e.message?.includes('duplicate column')) console.warn('[Schema] Migration:', e.message)
+      if (!e.message?.includes('duplicate column name')) console.warn('[Schema] Migration:', e.message)
     }
   }
   try {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_wallet_type ON wallet_actions(wallet_type, detected_at)`)
-  } catch {}
+  } catch (e) {
+    if (!e.message?.includes('already exists')) console.warn('[Schema] Index migration:', e.message)
+  }
+  try {
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_sig ON wallet_actions(signature) WHERE signature IS NOT NULL`)
+  } catch (e) {
+    if (!e.message?.includes('already exists')) console.warn('[Schema] Sig index migration:', e.message)
+  }
   if (added) console.log(`[Schema] Added ${added} column(s) to wallet_actions`)
 }
 
@@ -216,7 +225,7 @@ function closeDryRunPosition(id, data) {
         gross_pnl_pct = @gross_pnl_pct, net_pnl_pct = @net_pnl_pct,
         hold_minutes = @hold_minutes, outcome_valid = 1, status = 'closed'
     WHERE id = @id
-  `).run({ id, ...data })
+  `).run({ ...data, id })
 }
 
 function recordWalletAction(data) {

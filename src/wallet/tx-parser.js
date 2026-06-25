@@ -10,7 +10,7 @@ function classifyAction(logs) {
     if (log.includes('Instruction: InitializeLbPair')) return 'open_position'
     if (log.includes('Instruction: CloseLbPair'))      return 'close_position'
   }
-  return 'add_liquidity'
+  return null  // unrecognized instruction (swap, update, etc.) — caller should discard
 }
 
 function pubkeyStr(k) {
@@ -32,6 +32,7 @@ function parseMeteoraTx(txResult, signature) {
   if (!logs.some(l => l.includes(METEORA_DLMM_PROGRAM))) return null
 
   const actionType = classifyAction(logs)
+  if (!actionType) return null  // not a tracked Meteora action (swap, update, etc.)
 
   // Collect all account keys from the transaction
   const rawKeys = txResult.transaction?.message?.accountKeys || []

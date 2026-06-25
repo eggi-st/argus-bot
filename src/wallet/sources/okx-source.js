@@ -5,6 +5,9 @@
 //
 // OKX DEX API docs: https://www.okx.com/web3/build/docs/waas/dex-smart-money
 
+const fetch  = require('node-fetch')
+const crypto = require('crypto')
+
 async function discoverFromOkx({ cfg }) {
   const okx = cfg.okx || {}
 
@@ -12,11 +15,11 @@ async function discoverFromOkx({ cfg }) {
     throw new Error('OKX API key not configured — add okx.apiKey to user-config.json')
   }
 
-  const chain    = 'solana'
+  // OKX chain ID for Solana is numeric '501', not the string 'solana'
+  const chain    = '501'
   const baseUrl  = okx.baseUrl || 'https://www.okx.com'
   const endpoint = `${baseUrl}/api/v5/dex/market/smart-money?chainId=${chain}&limit=50`
 
-  const crypto  = require('crypto')
   const ts      = new Date().toISOString()
   const method  = 'GET'
   const path    = `/api/v5/dex/market/smart-money?chainId=${chain}&limit=50`
@@ -34,7 +37,7 @@ async function discoverFromOkx({ cfg }) {
         'OK-ACCESS-PASSPHRASE': okx.passphrase || '',
         'Content-Type':         'application/json',
       },
-      signal: AbortSignal.timeout(15_000),
+      timeout: 15_000,
     })
   } catch (e) {
     throw new Error(`OKX network error: ${e.message}`)

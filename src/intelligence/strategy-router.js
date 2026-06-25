@@ -60,7 +60,10 @@ function scoreStrategies(pool, config) {
     } else {
       const volScore = Math.max(0, 1 - vol / maxVol)
       const mid = (feeMin + feeMax) / 2
-      const feeTvlScore = Math.max(0, 1 - Math.abs((feeTvl - mid) / ((feeMax - feeMin) / 2)))
+      const halfRange = (feeMax - feeMin) / 2
+      const feeTvlScore = halfRange > 0
+        ? Math.max(0, 1 - Math.abs((feeTvl - mid) / halfRange))
+        : 1
       const score = Math.round((volScore * 60 + feeTvlScore * 40) * 100) / 100
       scores.push({
         strategy: 'spot', eligible: true, score,

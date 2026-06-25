@@ -67,8 +67,9 @@ async function discoverFromHelius({ rpcUrl, cfg }) {
     }
 
     for (const tx of (txs || [])) {
-      // Filter for Meteora LP actions
-      const isLp = METEORA_TYPES.has(tx.type) || METEORA_SOURCES.has(tx.source)
+      // Source is the reliable Meteora identifier; METEORA_TYPES includes generic types
+      // shared with Marinade/Orca/lending protocols so source-only check avoids false positives
+      const isLp = METEORA_SOURCES.has(tx.source)
       if (!isLp) continue
 
       // feePayer is the wallet that signed the LP transaction

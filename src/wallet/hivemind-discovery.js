@@ -82,7 +82,7 @@ function markFailure(source, errMsg) {
     UPDATE discovery_sources
     SET last_run = ?, failure_count = ?, cooldown_ms = ?, last_error = ?, paused_until = ?
     WHERE source = ?
-  `).run(new Date().toISOString(), failures, newCooldown, errMsg.slice(0, 200), pausedUntil, source)
+  `).run(new Date().toISOString(), failures, newCooldown, String(errMsg || 'unknown error').slice(0, 200), pausedUntil, source)
 
   if (failures >= AUTO_PAUSE_AFTER) {
     console.warn(`[Hivemind] ${source} auto-paused 24h after ${failures} failures`)
@@ -192,8 +192,9 @@ async function runDiscovery() {
     }
   }
 
+  // Always emit so wallet/index.js hot-add mechanism fires even if no new wallets
+  bus.emitSafe('tracked_wallets_updated', { discovered: totalNew })
   if (totalNew > 0) {
-    bus.emitSafe('tracked_wallets_updated', { discovered: totalNew })
     console.log(`[Hivemind] ${totalNew} new smart money wallet(s) added to tracker`)
   } else {
     console.log('[Hivemind] Discovery cycle complete — no new wallets found')

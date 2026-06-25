@@ -3,12 +3,10 @@ const bus      = require('../core/event-bus')
 const telegram = require('./telegram')
 
 function init() {
-  // Circuit breaker opened → P1 alert
+  // Circuit breaker opened → P1 alert (any risk gate block triggers alert)
   bus.onFast('risk_gate_blocked', payload => {
-    const reason = payload?.reason || ''
-    if (reason.toLowerCase().includes('circuit breaker') || reason.toLowerCase().includes('breaker')) {
-      telegram.circuitBreaker(reason)
-    }
+    const reason = payload?.reason || 'unknown'
+    telegram.circuitBreaker(reason)
   })
 
   // Dry run position closed → P3 info

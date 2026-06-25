@@ -9,6 +9,7 @@ const scheduler = require('./core/scheduler')
 
 const app = express()
 const PORT = parseInt(process.env.PORT || '4000')
+const HOST = process.env.HOST || '127.0.0.1'
 
 app.use(express.json())
 app.use(express.static(path.join(__dirname, '../public')))
@@ -61,14 +62,13 @@ app.get('/api/candidates', (req, res) => {
        FROM decisions WHERE status = ?
        ORDER BY created_at DESC LIMIT ?`
     ).all(status, limit)
-    // Parse JSON fields for convenience
-    const parsed = rows.map(r => ({
-      ...r,
-      indicators: r.indicators_json ? JSON.parse(r.indicators_json) : null,
-      strategy_scores: r.strategy_scores_json ? JSON.parse(r.strategy_scores_json) : null,
-      indicators_json: undefined,
-      strategy_scores_json: undefined,
-    }))
+    // Parse JSON fields per-row — bad JSON in one row should not 500 the whole endpoint
+    const parsed = rows.map(r => {
+      let indicators = null, strategy_scores = null
+      try { indicators = r.indicators_json ? JSON.parse(r.indicators_json) : null } catch {}
+      try { strategy_scores = r.strategy_scores_json ? JSON.parse(r.strategy_scores_json) : null } catch {}
+      return { ...r, indicators, strategy_scores, indicators_json: undefined, strategy_scores_json: undefined }
+    })
     res.json({ decisions: parsed, count: parsed.length })
   } catch (e) {
     res.status(500).json({ error: e.message })
@@ -93,7 +93,10 @@ app.get('/api/dry-run', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit || '30', 10), 200)
     const status = req.query.status  // optional filter: 'open' | 'closed'
 
-    const where = status ? `WHERE dr.status = '${status.replace(/'/g, "''")}'` : ''
+    const VALID_STATUS = ['open', 'closed', 'expired']
+    const safeStatus = VALID_STATUS.includes(status) ? status : null
+    const where = safeStatus ? 'WHERE dr.status = ?' : ''
+    const params = safeStatus ? [safeStatus, limit] : [limit]
     const positions = db.prepare(`
       SELECT dr.id, dr.opened_at, dr.closed_at, dr.token_symbol, dr.token_mint,
              dr.pool_address, dr.strategy, dr.entry_price_sol, dr.exit_price_sol,
@@ -102,7 +105,7 @@ app.get('/api/dry-run', (req, res) => {
       FROM dry_run_positions dr
       ${where}
       ORDER BY dr.opened_at DESC LIMIT ?
-    `).all(limit)
+    `).all(...params)
 
     res.json({ positions, stats: dryRun.getStats() })
   } catch (e) {
@@ -181,7 +184,7 @@ app.post('/api/hivemind/run', async (req, res) => {
 app.post('/api/hivemind/source/:name/pause', (req, res) => {
   try {
     const hivemind = require('./wallet/hivemind-discovery')
-    const durationMs = parseInt(req.body?.durationMs || 24 * 3600 * 1000)
+    const durationMs = parseInt(req.body?.durationMs, 10) || (24 * 3600 * 1000)
     hivemind.pauseSource(req.params.name, durationMs)
     res.json({ ok: true })
   } catch (e) { res.status(500).json({ error: e.message }) }
@@ -215,12 +218,15 @@ app.get('/api/wallet-actions', (req, res) => {
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
 let wss
+let _wsWired = false
 const clients = new Set()
 
 function broadcast(payload) {
   const msg = JSON.stringify(payload)
   for (const ws of clients) {
-    if (ws.readyState === 1) ws.send(msg)
+    try {
+      if (ws.readyState === 1) ws.send(msg)
+    } catch { clients.delete(ws) }
   }
 }
 
@@ -243,14 +249,17 @@ function setupWebSocket(server) {
     ws.on('error', () => clients.delete(ws))
   })
 
-  // Forward bus events to all connected UI clients
-  bus.onFast('ui_update', (payload) => broadcast(payload))
-  bus.onFast('risk_gate_blocked', (payload) => broadcast({ type: 'risk_gate_blocked', ...payload }))
-  bus.onFast('recommendation_expired', (payload) => broadcast({ type: 'recommendation_expired', ...payload }))
-  bus.onFast('scan_complete', (payload) => broadcast({ type: 'scan_complete', ...payload }))
-  bus.onFast('alert_triggered', (payload) => broadcast({ type: 'alert_triggered', ...payload }))
-  bus.onSlow('wallet_action_detected', (payload) => broadcast({ type: 'wallet_action_detected', ...payload }))
-  bus.onSlow('tracked_wallets_updated', (payload) => broadcast({ type: 'tracked_wallets_updated', ...payload }))
+  // Forward bus events to all connected UI clients — guard against double-registration
+  if (!_wsWired) {
+    _wsWired = true
+    bus.onFast('ui_update', (payload) => broadcast(payload))
+    bus.onFast('risk_gate_blocked', (payload) => broadcast({ type: 'risk_gate_blocked', ...payload }))
+    bus.onFast('recommendation_expired', (payload) => broadcast({ type: 'recommendation_expired', ...payload }))
+    bus.onFast('scan_complete', (payload) => broadcast({ type: 'scan_complete', ...payload }))
+    bus.onFast('alert_triggered', (payload) => broadcast({ type: 'alert_triggered', ...payload }))
+    bus.onSlow('wallet_action_detected', (payload) => broadcast({ type: 'wallet_action_detected', ...payload }))
+    bus.onSlow('tracked_wallets_updated', (payload) => broadcast({ type: 'tracked_wallets_updated', ...payload }))
+  }
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -260,7 +269,7 @@ let httpServer
 async function start() {
   httpServer = http.createServer(app)
   setupWebSocket(httpServer)
-  await new Promise((resolve) => httpServer.listen(PORT, '127.0.0.1', resolve))
+  await new Promise((resolve) => httpServer.listen(PORT, HOST, resolve))
 }
 
 async function stop() {

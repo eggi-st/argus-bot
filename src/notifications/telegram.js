@@ -71,7 +71,7 @@ class TelegramNotifier {
       console.warn(`[Telegram] Send failed (${priority}):`, err.message)
       if (maxRetries > 0) {
         this._retryQueue.push({ text: message, attemptsLeft: maxRetries })
-        this._drainRetryQueue()
+        this._drainRetryQueue().catch(e => console.warn('[Telegram] Retry drain error:', e.message))
       }
       return null
     }

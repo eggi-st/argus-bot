@@ -9,6 +9,8 @@ const { parseBucket }      = require('../learning/pattern-updater')
 const { getPattern, adjustScore } = require('../learning/pattern-reader')
 const { generateVerdict }  = require('../ai/verdict-generator')
 const telegram             = require('../notifications/telegram')
+const db                   = require('../db/database')
+const dryRun               = require('../dry-run/engine')
 
 let _scanning = false
 
@@ -52,11 +54,11 @@ async function runScan() {
     console.log('[IC] Scan in progress — skipping duplicate trigger')
     return null
   }
-  _scanning = true
   const started = Date.now()
   console.log('[IC] ── Scan started ──')
 
   try {
+    _scanning = true
     // Synchronous risk gate — check before any network calls
     const gate = riskState.check()
     if (!gate.allowed) {
@@ -81,7 +83,6 @@ async function runScan() {
       }
 
       // Skip pools that already have an active decision — avoid stacking duplicates
-      const db = require('../db/database')
       const existing = db.prepare(
         `SELECT id FROM decisions WHERE pool_address = ? AND status = 'active' LIMIT 1`
       ).get(pool.pool)
@@ -107,7 +108,6 @@ async function runScan() {
       // Smart money confirmation: boost confidence if a tracked wallet recently LP'd this pool
       let smartMoneyConfirmed = false
       try {
-        const db = require('../db/database')
         const smRow = db.prepare(`
           SELECT COUNT(DISTINCT wallet_address) as cnt
           FROM wallet_actions
@@ -121,7 +121,9 @@ async function runScan() {
           confidence = Math.min(1, confidence * 1.15)
           console.log(`[IC] 🐋 Smart money signal: ${smRow.cnt} wallet(s) in ${pool.base?.symbol} → conf boosted to ${(confidence*100).toFixed(0)}`)
         }
-      } catch {}
+      } catch (e) {
+        console.warn('[IC] Smart money check failed:', e.message)
+      }
 
       const indicators = {
         volatility: pool.volatility,
@@ -162,8 +164,11 @@ async function runScan() {
         decisions.push({ id: decisionId, pool, strategy: best.strategy, score: best.score, ttlMinutes, expiresAt, bucket })
 
         // Open a dry run position immediately so we start tracking P&L
-        const dryRun = require('../dry-run/engine')
-        dryRun.openForDecision(decisionId, pool, best.strategy)
+        try {
+          dryRun.openForDecision(decisionId, pool, best.strategy)
+        } catch (drErr) {
+          console.error(`[IC] Failed to open dry run for decision #${decisionId}:`, drErr.message)
+        }
 
         // Telegram alert — fire-and-forget
         telegram.recommendation({
@@ -173,7 +178,7 @@ async function runScan() {
           ttlMinutes,
           verdict:    null,
           poolUrl:    pool.pool ? `https://app.meteora.ag/dlmm/${pool.pool}` : null,
-        })
+        }).catch(e => console.warn('[IC] Telegram alert failed:', e.message))
 
         // Fire-and-forget LLM verdict (only if AI enabled in config)
         if (cfg.ai?.enabled) {

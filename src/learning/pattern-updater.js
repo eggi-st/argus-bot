@@ -46,6 +46,10 @@ function updatePattern(positionId, { netPnlPct, strategy, win }) {
 
   db.prepare(UPSERT).run(now, volatility_bucket, regime, strategy, winVal, netPnlPct)
 
+  if (!Number.isFinite(netPnlPct)) {
+    console.warn('[Pattern] Invalid netPnlPct — skipping pattern update')
+    return
+  }
   console.log(`[Pattern] ${volatility_bucket}×${regime}×${strategy}: win=${win ? '✓' : '✗'} pnl=${netPnlPct.toFixed(2)}%`)
 }
 

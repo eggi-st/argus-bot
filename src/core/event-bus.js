@@ -15,14 +15,15 @@ const FAST_EVENTS = new Set([
 
 // Slow path — AI and memory operations (1-10s SLA)
 const SLOW_EVENTS = new Set([
-  'ai_analysis_request',    // Token queued for LLM verdict
-  'ai_analysis_complete',   // LLM returned verdict
-  'memory_write',           // Write decision/outcome to SQLite
-  'dry_run_update',         // Virtual position updated
-  'pattern_update',         // Pattern library recalculation queued
-  'wallet_action_detected', // On-chain user action parsed
-  'outcome_recorded',       // Dry run position closed with result
-  'blacklist_updated',      // Token/deployer added to blacklist
+  'ai_analysis_request',     // Token queued for LLM verdict
+  'ai_analysis_complete',    // LLM returned verdict
+  'memory_write',            // Write decision/outcome to SQLite
+  'dry_run_update',          // Virtual position updated
+  'pattern_update',          // Pattern library recalculation queued
+  'wallet_action_detected',  // On-chain user action parsed
+  'outcome_recorded',        // Dry run position closed with result
+  'blacklist_updated',       // Token/deployer added to blacklist
+  'tracked_wallets_updated', // Hivemind discovered new wallets
 ])
 
 const ALL_EVENTS = new Set([...FAST_EVENTS, ...SLOW_EVENTS])
