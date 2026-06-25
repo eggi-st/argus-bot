@@ -157,6 +157,60 @@ app.post('/api/meridian/webhook/test', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// ── Meridian Feedback API ─────────────────────────────────────────────────────
+// Meridian pushes real trade outcomes here so Argus Pattern Library learns from
+// actual execution results, not just dry-run simulations.
+
+app.post('/api/feedback', (req, res) => {
+  try {
+    const { source, pool_address, strategy, pnl_pct, minutes_held, close_reason, volatility, fee_tvl_ratio } = req.body || {}
+
+    if (source !== 'meridian') return res.status(400).json({ error: 'source must be meridian' })
+    if (!pool_address || !strategy || pnl_pct == null) {
+      return res.status(400).json({ error: 'pool_address, strategy, pnl_pct required' })
+    }
+
+    // Find the matching active or recently expired decision for this pool
+    const decision = db.prepare(`
+      SELECT id, condition_bucket FROM decisions
+      WHERE pool_address = ? AND strategy = ?
+        AND status IN ('active', 'expired', 'followed')
+      ORDER BY created_at DESC LIMIT 1
+    `).get(pool_address, strategy)
+
+    if (!decision) {
+      console.log(`[Argus] Feedback received from Meridian for ${pool_address.slice(0, 8)} but no matching decision found — storing as unlinked outcome`)
+      return res.json({ ok: true, linked: false })
+    }
+
+    // Mark the decision as followed with outcome
+    const win = pnl_pct > 0
+    db.prepare(`
+      UPDATE decisions
+      SET status = 'followed', followed = 1, outcome_pnl_pct = ?, outcome_known = 1, win = ?
+      WHERE id = ?
+    `).run(pnl_pct, win ? 1 : 0, decision.id)
+
+    // Feed into Pattern Library via the learning bus
+    const bus = require('./core/event-bus')
+    bus.emitSafe('outcome_recorded', {
+      position_id:  decision.id,
+      pool_address,
+      strategy,
+      net_pnl_pct:  pnl_pct,
+      hold_minutes: minutes_held ?? null,
+      win,
+      source: 'meridian_feedback',
+    })
+
+    console.log(`[Argus] Meridian feedback recorded: ${pool_address.slice(0, 8)} ${strategy} pnl=${pnl_pct.toFixed(2)}% → decision #${decision.id} (win=${win})`)
+    res.json({ ok: true, linked: true, decision_id: decision.id, win })
+  } catch (e) {
+    console.error('[Argus] Feedback error:', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ── Hivemind Discovery API ────────────────────────────────────────────────────
 
 app.get('/api/hivemind', (req, res) => {
