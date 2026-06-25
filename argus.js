@@ -1,5 +1,9 @@
 'use strict'
-require('dotenv').config()
+// override:true — the .env file always wins over a stale/inherited process.env
+// (e.g. a PM2-cached or shell-exported TELEGRAM_BOT_TOKEN). Without this, a bot
+// token leaked into the environment from another app silently routes Argus's
+// messages to the wrong bot.
+require('dotenv').config({ override: true })
 const { init } = require('./src/core/init')
 
 process.on('uncaughtException', (err) => {
