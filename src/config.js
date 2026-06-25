@@ -74,6 +74,12 @@ const DEFAULTS = {
     // confidence when they enter the same pool Argus recommends.
     trackedWallets: [],
   },
+  helius: {
+    // Helius enhanced RPC — free tier at helius.xyz (100k credits/month).
+    // Used by Hivemind Discovery for cleaner ADD_LIQUIDITY detection.
+    // If set, becomes Source C in the fallback chain (after Meteora sources).
+    apiKey: null,
+  },
   ai: {
     // LLM verdict generation via OpenAI-compatible endpoint.
     // Compatible with SumoPod, Ollama (default), LM Studio, etc.

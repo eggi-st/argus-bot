@@ -10,8 +10,13 @@ const db  = require('../db/database')
 const bus = require('../core/event-bus')
 const { getConfig } = require('../config')
 
-// Priority order — first source that succeeds wins this cycle
-const SOURCE_ORDER = ['meteora', 'okx']
+// Priority order — first source that succeeds wins this cycle.
+// meteora        : on-chain, seeds from Argus decisions, zero API key
+// meteora-extended: on-chain, seeds from Pool Discovery API top pools
+// helius         : enhanced API (needs helius.apiKey), cleanest LP detection
+// solscan        : top token holders, no key, lowest signal precision
+// okx            : OKX smart money endpoint (needs okx.apiKey)
+const SOURCE_ORDER = ['meteora', 'meteora-extended', 'helius', 'solscan', 'okx']
 
 const DEFAULT_COOLDOWN_MS = 6 * 3600 * 1000  // 6 hours
 const MAX_COOLDOWN_MS     = 24 * 3600 * 1000  // 24 hours
@@ -128,6 +133,18 @@ async function runSource(name, ctx) {
     case 'meteora': {
       const { discoverFromMeteora } = require('./sources/meteora-source')
       return discoverFromMeteora(ctx)
+    }
+    case 'meteora-extended': {
+      const { discoverFromMeteoraExtended } = require('./sources/meteora-extended-source')
+      return discoverFromMeteoraExtended(ctx)
+    }
+    case 'helius': {
+      const { discoverFromHelius } = require('./sources/helius-source')
+      return discoverFromHelius(ctx)
+    }
+    case 'solscan': {
+      const { discoverFromSolscan } = require('./sources/solscan-source')
+      return discoverFromSolscan(ctx)
     }
     case 'okx': {
       const { discoverFromOkx } = require('./sources/okx-source')
