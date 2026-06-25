@@ -172,7 +172,7 @@ class TelegramNotifier {
     try {
       const res = await this._api('getUpdates', {
         offset: this._offset,
-        timeout: 30,
+        timeout: 5,
         allowed_updates: ['message'],
       })
       for (const update of res.result || []) {
