@@ -152,10 +152,111 @@ class TelegramNotifier {
   }
 
   boot(port) {
+    const serverUrl = process.env.ARGUS_SERVER_URL || `http://localhost:${port}`
     return this.send(
-      `🦅 <b>Argus online</b>\n<a href="http://127.0.0.1:${port}">Dashboard</a>`,
+      `<b>Argus online</b>\n<a href="${serverUrl}">Dashboard</a>`,
       'P3'
     )
+  }
+
+  // ── Polling / Command Handling ─────────────────────────────────────────────
+
+  startPolling() {
+    if (!this.enabled) return
+    this._offset = 0
+    console.log('[Telegram] Command polling started')
+    this._poll()
+  }
+
+  async _poll() {
+    try {
+      const res = await this._api('getUpdates', {
+        offset: this._offset,
+        timeout: 30,
+        allowed_updates: ['message'],
+      })
+      for (const update of res.result || []) {
+        this._offset = update.update_id + 1
+        const text = update.message?.text || ''
+        const chatId = update.message?.chat?.id
+        if (!chatId || !text.startsWith('/')) continue
+        const fromId = String(update.message?.from?.id || '')
+        const allowedChatId = String(this.chatId)
+        if (fromId !== allowedChatId && String(chatId) !== allowedChatId) continue
+        await this._handleCommand(text.split(' ')[0].toLowerCase(), chatId)
+      }
+    } catch (e) {
+      console.warn('[Telegram] Poll error:', e.message)
+    }
+    setTimeout(() => this._poll(), 1000)
+  }
+
+  async _handleCommand(cmd, chatId) {
+    const send = (text) => this._api('sendMessage', {
+      chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true,
+    })
+
+    if (cmd === '/start' || cmd === '/help') {
+      return send(
+        '<b>Argus — DLMM Intelligence Bot</b>\n\n' +
+        '/status — status sistem &amp; dry run stats\n' +
+        '/scan — trigger scan kandidat sekarang\n' +
+        '/reset — reset circuit breaker\n' +
+        '/help — tampilkan pesan ini'
+      )
+    }
+
+    if (cmd === '/status') {
+      try {
+        const riskState = require('../core/risk-state')
+        const scheduler = require('../core/scheduler')
+        const db = require('../db/database')
+        const r = riskState.state
+        const jobs = scheduler.getStatus()
+        const stats = db.prepare(`
+          SELECT
+            SUM(CASE WHEN status='open' THEN 1 ELSE 0 END) AS open,
+            SUM(CASE WHEN status='closed' THEN 1 ELSE 0 END) AS closed,
+            ROUND(AVG(CASE WHEN status='closed' AND net_pnl_pct IS NOT NULL THEN net_pnl_pct END), 2) AS avg_pnl,
+            ROUND(100.0 * SUM(CASE WHEN status='closed' AND net_pnl_pct > 0 THEN 1 ELSE 0 END) /
+              NULLIF(SUM(CASE WHEN status='closed' THEN 1 ELSE 0 END), 0), 0) AS win_rate
+          FROM dry_run_positions
+        `).get() || {}
+        const cb = r.circuit_breaker_open ? '🔴 OPEN' : '🟢 clear'
+        return send(
+          `<b>Argus Status</b>\n\n` +
+          `Circuit Breaker: ${cb}\n` +
+          `Posisi terbuka: ${r.current_open_count}/${r.limits?.max_open_positions || 5}\n` +
+          `Daily loss: $${(r.daily_realized_loss_usd || 0).toFixed(2)}\n` +
+          `Scheduler: ${jobs.length} jobs\n\n` +
+          `<b>Dry Run</b>\n` +
+          `Open: ${stats.open ?? 0} · Closed: ${stats.closed ?? 0}\n` +
+          `Win rate: ${stats.win_rate ?? '—'}% · Avg P&amp;L: ${stats.avg_pnl ?? '—'}%`
+        )
+      } catch (e) {
+        return send(`Error: ${e.message}`)
+      }
+    }
+
+    if (cmd === '/scan') {
+      try {
+        const ic = require('../intelligence/index')
+        ic.runScan().catch(() => {})
+        return send('🔍 Scan dimulai — hasil akan dikirim via notifikasi.')
+      } catch (e) {
+        return send(`Error: ${e.message}`)
+      }
+    }
+
+    if (cmd === '/reset') {
+      try {
+        const riskState = require('../core/risk-state')
+        riskState.resetCircuitBreaker()
+        return send('✅ Circuit breaker di-reset. Argus kembali aktif.')
+      } catch (e) {
+        return send(`Error: ${e.message}`)
+      }
+    }
   }
 }
 

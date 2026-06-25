@@ -63,6 +63,7 @@ async function init() {
   process.stdout.write('[Init] Layer 5 · Telegram... ')
   const telegram = require('../notifications/telegram')
   await telegram.init()
+  telegram.startPolling()
 
   const alertWiring = require('../notifications/alert-wiring')
   alertWiring.init()
@@ -78,10 +79,7 @@ async function init() {
   console.log(`  Argus online → http://127.0.0.1:${port}`)
   console.log('─'.repeat(50) + '\n')
 
-  await telegram.send(
-    `🦅 <b>Argus online</b>\nRisk: ${rs.circuit_breaker_open ? '🔴 CB OPEN' : '🟢 clear'} | <a href="http://127.0.0.1:${port}">Dashboard</a>`,
-    'P3'
-  )
+  await telegram.boot(port)
 
   return { bus, riskState, scheduler, telegram, server }
 }
