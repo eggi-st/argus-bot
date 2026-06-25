@@ -393,8 +393,10 @@
 
     // ── Dry Run ───────────────────────────────────────────────────────────────
     function loadDryRun() {
-      apiFetch('/api/dry-run?limit=20').then(r => r.json()).then(d => {
+      apiFetch('/api/dry-run?limit=30').then(r => r.json()).then(d => {
         const s = d.stats || {}
+
+        // ── Stats cards ──────────────────────────────────────────────────────
         const wr = s.win_rate
         const wrEl = document.getElementById('dr-winrate')
         wrEl.textContent = wr != null ? wr + '%' : '—'
@@ -406,40 +408,82 @@
         avgEl.style.color = avgPnl > 0 ? 'var(--green)' : avgPnl < 0 ? 'var(--red)' : ''
 
         document.getElementById('dr-open').textContent = s.open_positions ?? '0'
-        document.getElementById('dr-closed').textContent = s.total_closed ?? '0'
+        document.getElementById('dr-closed').textContent = `${s.wins ?? 0}W / ${(s.total_closed ?? 0) - (s.wins ?? 0)}L`
 
+        // ── Positions table ───────────────────────────────────────────────────
         const el = document.getElementById('dryrun-table')
-        if (!d.positions?.length) { el.innerHTML = '<div class="empty">Belum ada posisi.</div>'; return }
-        const COLS = '110px 90px 80px 60px 80px 1fr'
-        const rows = d.positions.slice(0, 15).map(p => {
+        const positions = d.positions || []
+        if (!positions.length) { el.innerHTML = '<div class="empty">Belum ada posisi.</div>'; return }
+
+        // Summary bar
+        const totalPnl = s.total_pnl_pct
+        const avgHold  = s.avg_hold_min != null ? Math.round(s.avg_hold_min) + 'm' : '—'
+        const totalStr = totalPnl != null
+          ? `<span style="color:${totalPnl >= 0 ? 'var(--green)' : 'var(--red)'}; font-weight:700">${totalPnl >= 0 ? '+' : ''}${totalPnl}%</span>`
+          : '—'
+        const summary = `<div style="display:flex;gap:20px;padding:8px 0 12px;font-size:12px;border-bottom:1px solid var(--border);margin-bottom:8px">` +
+          `<span style="color:var(--muted)">Total kumulatif: ${totalStr}</span>` +
+          `<span style="color:var(--muted)">Avg hold: ${avgHold}</span>` +
+          `<span style="color:var(--muted)">${s.total_closed ?? 0} posisi closed</span>` +
+          `</div>`
+
+        // Infer exit reason for old records (no close_reason stored)
+        function inferExit(p) {
+          if (p.close_reason) return p.close_reason
+          if (p.net_pnl_pct == null) return null
+          if (p.net_pnl_pct <= -15) return 'stop_loss'
+          if (p.net_pnl_pct >= 20)  return 'take_profit'
+          if (p.hold_minutes != null && p.hold_minutes >= 220) return 'max_hold'
+          return 'ttl_expired'
+        }
+
+        const CLOSE_COLOR = { stop_loss:'var(--red)', take_profit:'var(--green)', max_hold:'var(--yellow)', ttl_expired:'var(--muted)' }
+        const CLOSE_LABEL = { stop_loss:'SL', take_profit:'TP', max_hold:'time', ttl_expired:'TTL' }
+        const COLS = '100px 80px 80px 55px 110px 80px'
+
+        const rows = positions.slice(0, 25).map(p => {
           const isOpen = p.status === 'open'
           const pnl = isOpen ? null : p.net_pnl_pct
           const pnlStr = pnl != null
-            ? `<span style="font-weight:600;color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'}">${pnl >= 0 ? '+' : ''}${pnl}%</span>`
+            ? `<span style="font-weight:700;color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'}">${pnl >= 0 ? '+' : ''}${pnl}%</span>`
             : `<span style="color:var(--muted)"><span class="live-dot"></span>live</span>`
-          const feeStr = p.simulated_fee_pct > 0
-            ? `<span style="color:var(--green);font-size:11px">+${(p.simulated_fee_pct*100).toFixed(1)}%</span>`
-            : `<span style="color:var(--muted);font-size:11px">—</span>`
-          const holdStr = p.hold_minutes != null ? p.hold_minutes + 'm' : '—'
+
+          const holdStr = isOpen
+            ? (p.opened_at ? Math.floor((Date.now() - new Date(p.opened_at)) / 60000) + 'm' : '—')
+            : (p.hold_minutes != null ? p.hold_minutes + 'm' : '—')
+
+          // Opened at — relative time
+          const openedAt = p.opened_at ? new Date(p.opened_at) : null
+          const openedStr = openedAt
+            ? openedAt.toLocaleString('id-ID', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})
+            : '—'
+
           const stratColor = STRATEGY_COLOR[p.strategy] || 'muted'
           const dexLink = p.token_mint
             ? `<a href="https://dexscreener.com/solana/${p.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">${p.token_symbol || p.token_mint.slice(0,8)}</a>`
             : `<span style="font-weight:600">${p.token_symbol || '?'}</span>`
-          const CLOSE_COLOR = { stop_loss:'var(--red)', take_profit:'var(--green)', max_hold:'var(--muted)', ttl_expired:'var(--muted)' }
-          const CLOSE_LABEL = { stop_loss:'SL', take_profit:'TP', max_hold:'time', ttl_expired:'TTL' }
-          const closeEl = isOpen
-            ? `<span style="color:var(--green);font-size:11px"><span class="live-dot"></span>open</span>`
-            : `<span style="color:${CLOSE_COLOR[p.close_reason]||'var(--muted)'};font-size:11px">${CLOSE_LABEL[p.close_reason]||p.close_reason||'closed'}</span>`
-          return `<div class="tbl-row" style="display:grid;grid-template-columns:${COLS};gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">` +
+
+          const exitReason = inferExit(p)
+          const isInferred = !p.close_reason && exitReason && !isOpen
+          const exitColor  = isOpen ? 'var(--green)' : (CLOSE_COLOR[exitReason] || 'var(--muted)')
+          const exitLabel  = isOpen
+            ? `<span class="live-dot"></span>open`
+            : `${CLOSE_LABEL[exitReason] || '?'}${isInferred ? '<span style="opacity:.5">?</span>' : ''}`
+          const closeEl = `<span style="color:${exitColor};font-size:12px;font-weight:600">${exitLabel}</span>`
+
+          return `<div class="tbl-row" style="display:grid;grid-template-columns:${COLS};gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">` +
             `<span>${dexLink}</span>` +
-            `<span><span class="pill ${stratColor}">${p.strategy}</span></span>` +
+            `<span><span class="pill ${stratColor}" style="font-size:10px">${p.strategy}</span></span>` +
             `<span>${pnlStr}</span>` +
-            `<span>${feeStr}</span>` +
-            `<span style="color:var(--muted)">${holdStr}</span>` +
+            `<span style="color:var(--muted);font-size:12px">${holdStr}</span>` +
+            `<span style="color:var(--muted);font-size:11px">${openedStr}</span>` +
             `<span>${closeEl}</span>` +
             `</div>`
         }).join('')
-        el.innerHTML = `<div style="display:grid;grid-template-columns:${COLS};gap:10px;padding:0 0 7px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px"><span>Token</span><span>Strategy</span><span>Net P&L</span><span>Fee sim</span><span>Hold</span><span>Exit</span></div>${rows}`
+
+        const header = `<div style="display:grid;grid-template-columns:${COLS};gap:8px;padding:0 0 7px;border-bottom:2px solid var(--border);margin-bottom:4px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">` +
+          `<span>Token</span><span>Strategy</span><span>Net P&L</span><span>Hold</span><span>Opened</span><span>Exit</span></div>`
+        el.innerHTML = summary + header + rows
       }).catch(() => {})
     }
 
