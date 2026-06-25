@@ -64,7 +64,7 @@ function scoreStrategies(pool, config) {
       const feeTvlScore = halfRange > 0
         ? Math.max(0, 1 - Math.abs((feeTvl - mid) / halfRange))
         : 1
-      const score = Math.round((volScore * 60 + feeTvlScore * 40) * 100) / 100
+      const score = Math.round((volScore * 0.6 + feeTvlScore * 0.4) * 100) / 100
       scores.push({
         strategy: 'spot', eligible: true, score,
         reason: `vol=${vol}<=${maxVol}, feeTvl=${feeTvl} in [${feeMin}–${feeMax}]`,
@@ -77,7 +77,7 @@ function scoreStrategies(pool, config) {
   {
     const volScore = vol != null ? Math.min(1, vol / 3) : 0.5
     const feeTvlScore = feeTvl != null ? Math.min(1, feeTvl / 0.3) : 0.5
-    const score = Math.round((volScore * 50 + feeTvlScore * 50) * 100) / 100
+    const score = Math.round((volScore * 0.5 + feeTvlScore * 0.5) * 100) / 100
     scores.push({
       strategy: 'bid_ask', eligible: true, score,
       reason: vol != null ? `vol=${vol}, feeTvl=${feeTvl}` : 'tail-safe default',
@@ -112,7 +112,7 @@ function scoreStrategies(pool, config) {
       const pullbackScore = athRange > 0 ? Math.min(1, pullback / athRange) : 0.5
       const volScore = vol != null ? Math.max(0, 1 - vol / maxVol) : 0.5
       const orgScore = organic != null ? Math.min(1, organic / 100) : 0.5
-      const score = Math.round((pullbackScore * 40 + volScore * 30 + orgScore * 30) * 100) / 100
+      const score = Math.round((pullbackScore * 0.4 + volScore * 0.3 + orgScore * 0.3) * 100) / 100
       scores.push({
         strategy: 'limit_order', eligible: true, score,
         reason: `ath=${priceVsAth}%, vol=${vol}, organic=${organic}`,
