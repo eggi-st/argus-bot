@@ -208,7 +208,7 @@ app.get('/api/candidates', (req, res) => {
     const rows = db.prepare(
       `SELECT id, created_at, expires_at, token_symbol, token_mint, pool_address,
               strategy, confidence, condition_bucket, status, llm_verdict,
-              indicators_json, strategy_scores_json
+              indicators_json, strategy_scores_json, primary_technique, technique_author
        FROM decisions WHERE status = ?
        ORDER BY created_at DESC LIMIT ?`
     ).all(status, limit)
@@ -272,6 +272,95 @@ app.get('/api/pattern-library', (req, res) => {
       ORDER BY sample_count DESC, active DESC
     `).all()
     res.json({ patterns: rows, total: rows.length })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Technique attribution (Phase 4) ────────────────────────────────────────────
+// Secondary, on-demand rollup: closed dry-run outcomes grouped by the technique that
+// entered (or exited) each position, joined to the registry for provenance. Used for the
+// attribution dashboard — NOT for gating (the primary learner stays vol×regime×strategy).
+app.get('/api/techniques/performance', (req, res) => {
+  try {
+    const reg = db.prepare(`SELECT id, label, author, author_type, side, applies_to, maturity FROM techniques`).all()
+    const agg = (col) => db.prepare(`
+      SELECT ${col} AS tech, strategy,
+             COUNT(*) AS n,
+             SUM(CASE WHEN net_pnl_pct > 0 THEN 1 ELSE 0 END) AS wins,
+             ROUND(AVG(net_pnl_pct), 3) AS mean_pnl
+      FROM dry_run_positions
+      WHERE status = 'closed' AND outcome_valid = 1 AND ${col} IS NOT NULL
+      GROUP BY ${col}, strategy
+    `).all()
+    const entryRows = agg('entry_technique')
+    const exitRows  = agg('exit_technique')
+
+    const roll = (rows) => {
+      const byTech = {}
+      for (const r of rows) {
+        const t = (byTech[r.tech] ||= { n: 0, wins: 0, pnlSum: 0, by_strategy: [] })
+        t.n += r.n; t.wins += r.wins; t.pnlSum += (r.mean_pnl || 0) * r.n
+        t.by_strategy.push({ strategy: r.strategy, n: r.n, wins: r.wins,
+          win_rate: r.n ? Math.round(r.wins / r.n * 100) / 100 : null, mean_pnl_net: r.mean_pnl })
+      }
+      for (const t of Object.values(byTech)) {
+        t.win_rate = t.n ? Math.round(t.wins / t.n * 100) / 100 : null
+        t.mean_pnl_net = t.n ? Math.round(t.pnlSum / t.n * 1000) / 1000 : null
+        delete t.pnlSum
+      }
+      return byTech
+    }
+    const entryByTech = roll(entryRows)
+    const exitByTech  = roll(exitRows)
+
+    // Per-technique registry view (includes zero-sample techniques so the full catalogue shows)
+    const techniques = reg.map(t => {
+      let applies_to = []
+      try { applies_to = t.applies_to ? JSON.parse(t.applies_to) : [] } catch {}
+      return {
+        id: t.id, label: t.label, author: t.author, author_type: t.author_type,
+        side: t.side, maturity: t.maturity, applies_to,
+        entry: entryByTech[t.id] || null,
+        exit:  exitByTech[t.id]  || null,
+      }
+    })
+
+    // Per-author rollup: "whose technique actually wins" (entry techniques only)
+    const authorMap = {}
+    for (const t of reg) {
+      const e = entryByTech[t.id]; if (!e) continue
+      const a = (authorMap[t.author] ||= { author: t.author, author_type: t.author_type, n: 0, wins: 0, pnlSum: 0 })
+      a.n += e.n; a.wins += e.wins; a.pnlSum += (e.mean_pnl_net || 0) * e.n
+    }
+    const by_author = Object.values(authorMap).map(a => ({
+      author: a.author, author_type: a.author_type, sample_count: a.n, wins: a.wins,
+      win_rate: a.n ? Math.round(a.wins / a.n * 100) / 100 : null,
+      mean_pnl_net: a.n ? Math.round(a.pnlSum / a.n * 1000) / 1000 : null,
+    })).sort((x, y) => (y.win_rate ?? -1) - (x.win_rate ?? -1))
+
+    // Shadow A/B: for limit_order bb_plus_rsi entries, how often did the shadow agree?
+    const shadowRows = db.prepare(`
+      SELECT signal_provenance_json FROM decisions
+      WHERE strategy = 'limit_order' AND signal_provenance_json IS NOT NULL
+      ORDER BY id DESC LIMIT 500
+    `).all()
+    let agree = 0, disagree = 0, primary = 'bb_plus_rsi', shadowTech = 'supertrend_or_rsi'
+    for (const r of shadowRows) {
+      try {
+        const p = JSON.parse(r.signal_provenance_json)
+        const primaryConfirmed = (p.confirmations || []).some(c => c.confirmed)
+        if (!primaryConfirmed || !p.shadow) continue
+        if (p.shadow.skipped) continue
+        if (p.shadow.confirmed) agree++; else disagree++
+        if (p.primary_technique) primary = p.primary_technique
+        if (p.shadow.technique) shadowTech = p.shadow.technique
+      } catch {}
+    }
+    const shadow_ab = { primary, shadow: shadowTech, agree, disagree,
+      total: agree + disagree, agreement_rate: (agree + disagree) ? Math.round(agree / (agree + disagree) * 100) / 100 : null }
+
+    res.json({ techniques, by_author, shadow_ab })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
