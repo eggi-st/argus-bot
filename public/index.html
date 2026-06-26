@@ -31,11 +31,10 @@
     }
     /* ── Reset ──────────────────────────────────────────────────────────────── */
     *{box-sizing:border-box;margin:0;padding:0}
-    html,body{overflow-x:hidden}
     ::-webkit-scrollbar{width:4px;height:4px}
     ::-webkit-scrollbar-track{background:transparent}
     ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
-    body{background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Courier New",monospace;font-size:13px;line-height:1.5;overscroll-behavior:none}
+    body{background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Courier New",monospace;font-size:13px;line-height:1.5;overscroll-behavior:none;overflow-x:hidden}
 
     /* ── Sidebar ────────────────────────────────────────────────────────────── */
     #sidebar{position:fixed;left:0;top:0;height:100%;width:64px;background:#0d1117;border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:14px 0 18px;gap:1px;z-index:50}
