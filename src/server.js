@@ -165,6 +165,10 @@ app.post('/api/feedback', (req, res) => {
 // ── All /api/* routes below require auth ──────────────────────────────────────
 app.use('/api', authMiddleware)
 
+app.get('/api/scan/status', (req, res) => {
+  res.json({ ok: true, last_scan: _lastScan })
+})
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -489,6 +493,7 @@ app.get('/api/feedback/history', (req, res) => {
 let wss
 let _wsWired = false
 const clients = new Set()
+let _lastScan = null
 
 function broadcast(payload) {
   const msg = JSON.stringify(payload)
@@ -526,7 +531,10 @@ function setupWebSocket(server) {
   // Forward bus events to all connected UI clients — guard against double-registration
   if (!_wsWired) {
     _wsWired = true
-    bus.onFast('ui_update', (payload) => broadcast(payload))
+    bus.onFast('ui_update', (payload) => {
+      if (payload?.type === 'scan_result') _lastScan = payload
+      broadcast(payload)
+    })
     bus.onFast('risk_gate_blocked', (payload) => broadcast({ type: 'risk_gate_blocked', ...payload }))
     bus.onFast('recommendation_expired', (payload) => broadcast({ type: 'recommendation_expired', ...payload }))
     bus.onFast('scan_complete', (payload) => broadcast({ type: 'scan_complete', ...payload }))

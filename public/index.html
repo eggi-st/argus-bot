@@ -339,6 +339,7 @@
           <div class="stat-metric"><span class="stat-metric-label">Open pos</span><span class="stat-metric-value" id="open-count">—</span></div>
           <div class="stat-metric"><span class="stat-metric-label">Daily loss</span><span class="stat-metric-value" id="daily-loss">—</span></div>
           <div class="stat-metric"><span class="stat-metric-label">Blacklisted</span><span class="stat-metric-value" id="bl-count">—</span></div>
+          <div class="stat-metric"><span class="stat-metric-label">Last scan</span><span class="stat-metric-value" id="last-scan-info" style="font-size:10px">—</span></div>
         </div>
         <div class="card">
           <div class="card-title">Hivemind</div>
@@ -476,6 +477,11 @@
         <div class="stat-sub">semua outcome Meridian</div>
       </div>
     </div>
+    <div class="card" id="pnl-chart-card" style="display:none">
+      <div class="card-title">Cumulative P&L — Meridian</div>
+      <svg id="pnl-chart" width="100%" height="90" style="display:block"></svg>
+    </div>
+
     <div class="card">
       <div class="card-title">Meridian Outcomes <span id="fb-count-label"></span>
         <button class="btn btn-gray" onclick="loadFeedbackHistory()" style="font-size:10px;padding:3px 9px">↻</button>
@@ -565,7 +571,7 @@ async function checkAuth() {
 
 // ── Page switching ─────────────────────────────────────────────────────────────
 const PAGE_LOADERS = {
-  dash:     () => { loadDecisions(); loadDryRunSummary(); loadRisk() },
+  dash:     () => { loadDecisions(); loadDryRunSummary(); loadRisk(); loadScanStatus() },
   dryrun:   () => loadDryRun(),
   patterns: () => loadPatternLibrary(),
   hivemind: () => loadHivemind(),
@@ -849,13 +855,20 @@ function loadPatternLibrary() {
     if (pendSec && pendList) {
       if (!pending.length) { pendSec.style.display = 'none' } else {
         pendSec.style.display = 'block'
-        pendList.innerHTML = pending.map(p =>
-          `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px">
-            <span style="color:var(--muted)">${p.volatility_bucket}×${p.regime}×${p.strategy}</span>
-            <span style="margin-left:auto;color:var(--muted2);font-size:11px">N=${p.sample_count}/20</span>
-            <div style="width:60px;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden"><div style="height:100%;background:var(--indigo);width:${Math.min(100,(p.sample_count/20)*100)}%"></div></div>
+        pendList.innerHTML = pending.map(p => {
+          const pct = Math.min(100, (p.sample_count / 20) * 100)
+          const remain = 20 - p.sample_count
+          return `<div style="padding:8px 0;border-bottom:1px solid var(--border)">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:12px">
+              <span style="color:var(--fg)">${p.volatility_bucket} × ${p.regime}</span>
+              <span class="badge ${STRAT_BADGE[p.strategy]||'badge-gray'}" style="font-size:9px">${STRAT_LABEL[p.strategy]||p.strategy}</span>
+              <span style="margin-left:auto;color:var(--muted2);font-size:11px">N=${p.sample_count}/20 · <span style="color:var(--indigo)">${remain} lagi</span></span>
+            </div>
+            <div style="height:6px;background:var(--bg3);border-radius:3px;overflow:hidden">
+              <div style="height:100%;background:var(--indigo);width:${pct}%;transition:width 0.3s"></div>
+            </div>
           </div>`
-        ).join('')
+        }).join('')
       }
     }
   }).catch(() => {})
@@ -994,7 +1007,69 @@ function loadFeedbackHistory() {
       </div>`
     }).join('')
     tbl.innerHTML = `<div class="tbl-wrap">${header + rows}</div>`
+    renderPnlChart(outcomes.slice().reverse())
   }).catch(() => {})
+}
+
+function loadScanStatus() {
+  apiFetch('/api/scan/status').then(r => r.json()).then(d => {
+    const info = document.getElementById('last-scan-info')
+    if (!info) return
+    const sc = d.last_scan
+    if (!sc) { info.textContent = '—'; return }
+    const ago = Math.round((Date.now() - new Date(sc.ts).getTime()) / 60000)
+    const agoStr = ago < 1 ? 'baru saja' : ago + 'm lalu'
+    info.textContent = `${agoStr} · ${sc.total_screened ?? 0} screened · ${sc.decisions ?? 0} dec`
+  }).catch(() => {})
+}
+
+function renderPnlChart(outcomes) {
+  const card = document.getElementById('pnl-chart-card')
+  const svg  = document.getElementById('pnl-chart')
+  if (!card || !svg) return
+  if (outcomes.length < 2) { card.style.display = 'none'; return }
+  card.style.display = 'block'
+
+  let cum = 0
+  const pts = outcomes.map(o => { cum += (o.outcome_pnl_pct || 0); return cum })
+
+  const W = svg.getBoundingClientRect().width || 400
+  const H = 90
+  const PAD = { t: 10, b: 20, l: 38, r: 8 }
+  const cW = W - PAD.l - PAD.r
+  const cH = H - PAD.t - PAD.b
+
+  const minY = Math.min(0, ...pts)
+  const maxY = Math.max(0, ...pts)
+  const rangeY = maxY - minY || 1
+
+  const xOf = i => PAD.l + (i / Math.max(pts.length - 1, 1)) * cW
+  const yOf = v => PAD.t + (1 - (v - minY) / rangeY) * cH
+  const zeroY = yOf(0)
+
+  const polyPts = pts.map((v, i) => `${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' ')
+  const areaD   = `M${xOf(0).toFixed(1)},${zeroY.toFixed(1)} ` +
+    pts.map((v, i) => `L${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' ') +
+    ` L${xOf(pts.length - 1).toFixed(1)},${zeroY.toFixed(1)} Z`
+
+  const bull     = pts[pts.length - 1] >= 0
+  const lineClr  = bull ? 'var(--green)' : 'var(--red)'
+  const fillClr  = bull ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)'
+
+  const yLabels = [maxY, 0, minY]
+    .filter((v, i, a) => a.indexOf(v) === i)
+    .map(v => `<text x="${PAD.l - 4}" y="${(yOf(v) + 4).toFixed(1)}" fill="var(--muted2)" font-size="9" text-anchor="end">${v >= 0 ? '+' : ''}${v.toFixed(1)}%</text>`)
+    .join('')
+
+  svg.setAttribute('height', H)
+  svg.innerHTML = `
+    <defs><clipPath id="cp-pnl"><rect x="${PAD.l}" y="${PAD.t}" width="${cW}" height="${cH}"/></clipPath></defs>
+    <line x1="${PAD.l}" y1="${zeroY.toFixed(1)}" x2="${(PAD.l+cW).toFixed(1)}" y2="${zeroY.toFixed(1)}" stroke="var(--border)" stroke-width="1" stroke-dasharray="3,3"/>
+    <path d="${areaD}" fill="${fillClr}" clip-path="url(#cp-pnl)"/>
+    <polyline points="${polyPts}" fill="none" stroke="${lineClr}" stroke-width="1.5" clip-path="url(#cp-pnl)"/>
+    ${yLabels}
+    <text x="${xOf(0).toFixed(1)}" y="${H}" fill="var(--muted2)" font-size="9" text-anchor="middle">1</text>
+    <text x="${xOf(pts.length-1).toFixed(1)}" y="${H}" fill="var(--muted2)" font-size="9" text-anchor="middle">${pts.length}</text>`
 }
 
 // ── Rejection Log ──────────────────────────────────────────────────────────────
@@ -1112,7 +1187,7 @@ function connect() {
       const msg = JSON.parse(data)
       if (msg.type === 'init' || msg.type === 'risk_update') updateRisk(msg.risk)
       if (msg.type === 'scan_result' || msg.type === 'scan_complete' || msg.type === 'recommendation_expired') {
-        loadDecisions(); loadDryRunSummary(); loadRejections()
+        loadDecisions(); loadDryRunSummary(); loadRejections(); loadScanStatus()
         if (document.getElementById('page-dryrun').classList.contains('active')) loadDryRun()
       }
       if (msg.type === 'verdict_ready') {
