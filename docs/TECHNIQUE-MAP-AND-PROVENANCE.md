@@ -329,6 +329,10 @@ Revised order:
    limit_order decision (ZINC, RSI 16.9 + price below lower band); gate rejected
    6 RSI-oversold-but-not-below-band candidates.
 4. **Secondary technique learning** `(technique × strategy)` + attribution dashboard.
+   ✅ **SHIPPED 2026-06-26** (commit 28aac7f). On-demand rollup at
+   `GET /api/techniques/performance` (entry/exit win-rate per technique + per-author
+   + shadow-A/B agreement); "Technique Attribution" card on the Patterns page;
+   technique badge on Active Decisions rows. No new table — attribution, not gating.
 5. **Meridian feedback carries technique** → real-execution edge per author.
 
 ---
