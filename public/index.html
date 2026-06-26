@@ -31,6 +31,7 @@
     }
     /* ── Reset ──────────────────────────────────────────────────────────────── */
     *{box-sizing:border-box;margin:0;padding:0}
+    html,body{overflow-x:hidden}
     ::-webkit-scrollbar{width:4px;height:4px}
     ::-webkit-scrollbar-track{background:transparent}
     ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
@@ -110,7 +111,7 @@
     .dec-dot-spot{background:#22c55e;box-shadow:0 0 4px rgba(34,197,94,.5)}
     .dec-dot-bidask{background:#eab308;box-shadow:0 0 4px rgba(234,179,8,.5)}
     .dec-dot-lo{background:#6366f1;box-shadow:0 0 4px rgba(99,102,241,.5)}
-    .dec-main{flex:1;min-width:0}
+    .dec-main{flex:1;min-width:0;overflow:hidden}
     .dec-top{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
     .dec-pair{font-size:.78rem;color:#d1d5db;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:130px}
     .dec-summary{font-size:.68rem;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -188,19 +189,37 @@
 
     /* ── Mobile: sidebar → bottom bar ───────────────────────────────────────── */
     @media(max-width:640px){
-      header{left:0}
+      /* Header — prevent wrapping, hide verbose items */
+      header{left:0;padding:0 12px;gap:8px}
+      header h1{white-space:nowrap}
+      header h1 span{display:none}
+      #hdr-ts{display:none}
+      #hdr-status{gap:4px}
+      /* Sidebar → bottom bar */
       #sidebar{position:fixed;left:0;top:auto;bottom:0;height:56px;width:100%;flex-direction:row;align-items:center;padding:0 8px;gap:0;border-right:none;border-top:1px solid var(--border)}
       #sidebar img{display:none}
       nav{flex-direction:row;padding:0;width:100%;justify-content:space-around;gap:0}
       .nav-btn{flex:1;padding:6px 4px;border-radius:8px}
       .nav-btn:hover .tip{display:none}
+      /* Main */
       #main{margin-left:0;margin-top:52px;padding-bottom:64px}
+      .page{padding:16px}
+      /* Stat cards — allow label to wrap on narrow cards */
+      .stat-label{white-space:normal;line-height:1.3}
       .stat-row-4{grid-template-columns:1fr 1fr}
       .stat-row-3{grid-template-columns:1fr 1fr}
+      /* Make orphan 3rd card (odd last-child in 2-col grid) span full width */
+      .stat-row-3 > :last-child:nth-child(odd){grid-column:1/-1}
+      /* Grids */
       .dash-grid{grid-template-columns:1fr !important}
       .hv-grid{grid-template-columns:1fr !important}
+      /* Position cards */
       .pos-card-body{grid-template-columns:70px 1px 1fr}
       .pos-grid{grid-template-columns:1fr 1fr}
+      /* Rejection log — truncate long summary in card title */
+      #rej-summary{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      /* Scan button: icon only to save card-title width */
+      .scan-label{display:none}
     }
   </style>
 </head>
@@ -304,7 +323,7 @@
         <div class="card-title">Active Decisions
           <div style="display:flex;gap:6px">
             <button class="btn btn-gray" onclick="loadDecisions()" style="font-size:10px;padding:3px 9px">↻</button>
-            <button id="scan-btn" class="btn btn-scan" onclick="triggerScan()">▶ Scan Now</button>
+            <button id="scan-btn" class="btn btn-scan" onclick="triggerScan()">▶ <span class="scan-label">Scan Now</span></button>
           </div>
         </div>
         <div id="decisions-list" class="empty">Belum ada decision — scan tiap 15 menit.</div>
@@ -855,7 +874,7 @@ function loadHivemind() {
       const pauseBtn = s.state !== 'paused'
         ? `<button class="btn btn-gray" style="font-size:10px;padding:1px 7px;margin-left:auto" onclick="sourcePause('${s.source}')">pause</button>`
         : `<button class="btn btn-gray" style="font-size:10px;padding:1px 7px;margin-left:auto;color:var(--yellow)" onclick="sourceResume('${s.source}')">resume</button>`
-      return `<div class="src-row"><span style="width:100px;font-weight:600">${s.source}</span><span style="color:${STATE_COLOR[s.state]||'var(--muted)'};">${s.state}${detail}${fails}</span>${pauseBtn}</div>`
+      return `<div class="src-row"><span style="flex-shrink:0;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600">${s.source}</span><span style="color:${STATE_COLOR[s.state]||'var(--muted)'};">${s.state}${detail}${fails}</span>${pauseBtn}</div>`
     }).join('') || '<span style="color:var(--muted);font-size:12px">No sources configured</span>'
   }).catch(() => {})
   apiFetch('/api/hivemind/wallets').then(r => r.json()).then(d => {
