@@ -327,6 +327,37 @@ function migrateSchema() {
   } catch (e) {
     if (!e.message?.includes('already exists')) console.warn('[Schema] techniques:', e.message)
   }
+
+  // feedback_outcomes (Phase 5) — real Meridian execution outcomes, the LIVE ground-truth
+  // counterpart to dry_run_positions. Kept separate so the attribution rollup can compare
+  // dry-run vs live per technique (the reality-gap signal). Deduped on outcome_id.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS feedback_outcomes (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at        TEXT NOT NULL,
+        outcome_id        TEXT,                 -- stable per close (pool:deployed_at) for dedup
+        source            TEXT,                 -- 'meridian'
+        pool_address      TEXT,
+        token_symbol      TEXT,
+        strategy          TEXT,
+        entry_technique   TEXT,
+        technique_author  TEXT,
+        exit_technique    TEXT,
+        pnl_pct           REAL,
+        fees_earned_usd   REAL,
+        win               INTEGER,
+        minutes_held      INTEGER,
+        close_reason      TEXT,
+        condition_bucket  TEXT,
+        linked_decision_id INTEGER
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_outcome_id ON feedback_outcomes(outcome_id) WHERE outcome_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_feedback_tech ON feedback_outcomes(entry_technique, strategy);
+    `)
+  } catch (e) {
+    if (!e.message?.includes('already exists')) console.warn('[Schema] feedback_outcomes:', e.message)
+  }
 }
 
 // Seed/refresh the technique registry from the static catalogue. INSERT OR REPLACE so
@@ -417,6 +448,22 @@ function closeDryRunPosition(id, data) {
         status             = 'closed'
     WHERE id = @id
   `).run({ ...data, id })
+}
+
+// Phase 5: insert a live Meridian outcome. INSERT OR IGNORE on outcome_id dedups
+// double-pushes (same close relayed from multiple Meridian paths). Returns true if inserted.
+function recordFeedbackOutcome(data) {
+  const r = getStmt('insertFeedbackOutcome', `
+    INSERT OR IGNORE INTO feedback_outcomes
+      (created_at, outcome_id, source, pool_address, token_symbol, strategy,
+       entry_technique, technique_author, exit_technique, pnl_pct, fees_earned_usd,
+       win, minutes_held, close_reason, condition_bucket, linked_decision_id)
+    VALUES
+      (@created_at, @outcome_id, @source, @pool_address, @token_symbol, @strategy,
+       @entry_technique, @technique_author, @exit_technique, @pnl_pct, @fees_earned_usd,
+       @win, @minutes_held, @close_reason, @condition_bucket, @linked_decision_id)
+  `).run(data)
+  return r.changes > 0
 }
 
 function recordRejection(data) {
@@ -549,7 +596,7 @@ function getTokenAth(mint) {
 module.exports = {
   initSchema, db,
   recordDecision, expireDecision, markFollowed,
-  recordDryRunPosition, closeDryRunPosition,
+  recordDryRunPosition, closeDryRunPosition, recordFeedbackOutcome,
   recordWalletAction, recordRejection, recordPatternReconciled,
   openOrUpdateGap, resolveStaleGaps, listOpenGaps,
   recordSystemReport, recordTuningEvent, getTuningEvents,

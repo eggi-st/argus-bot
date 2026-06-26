@@ -888,43 +888,51 @@ function loadPatternLibrary() {
   }).catch(() => {})
 }
 
-// ── Technique Attribution (Phase 4) ─────────────────────────────────────────────
-const AUTHOR_BADGE = { 'classic-ta':'badge-blue', 'bengshark':'badge-purple', 'argus-ai':'badge-green', 'eggi':'badge-gray' }
-const AUTHOR_LABEL = { classic_ta:'Classic TA', community:'Community', ai_derived:'AI', user:'User' }
+// ── Technique Attribution (Phase 4 + 5 live) ────────────────────────────────────
+const AUTHOR_BADGE = { 'classic-ta':'badge-blue', 'bengshark':'badge-purple', 'argus-ai':'badge-green', 'meridian':'badge-yellow', 'eggi':'badge-gray' }
 function wrTint(wr) { return wr == null ? 'var(--muted)' : wr >= 0.55 ? 'var(--green)' : wr >= 0.4 ? 'var(--yellow)' : 'var(--red)' }
-function perfStr(p) {
-  if (!p) return '<span style="color:var(--muted2)">—</span>'
-  const pnl = p.mean_pnl_net != null ? `${p.mean_pnl_net > 0 ? '+' : ''}${p.mean_pnl_net.toFixed(2)}%` : '—'
-  return `<span style="color:${wrTint(p.win_rate)}">${p.win_rate != null ? Math.round(p.win_rate*100)+'%' : '—'}</span> <span style="color:var(--muted2)">N=${p.n} · ${pnl}</span>`
+function wrCell(p) {
+  if (!p || p.win_rate == null) return '<span style="color:var(--muted2)">—</span>'
+  const pnl = p.mean_pnl_net != null ? ` ${p.mean_pnl_net > 0 ? '+' : ''}${p.mean_pnl_net.toFixed(1)}%` : ''
+  return `<span style="color:${wrTint(p.win_rate)}">${Math.round(p.win_rate*100)}%</span><span style="color:var(--muted2);font-size:10px"> N${p.n||p.sample_count}${pnl}</span>`
 }
 function loadTechniques() {
   apiFetch('/api/techniques/performance').then(r => r.json()).then(d => {
-    // Shadow A/B summary in the card title
     const ab = d.shadow_ab
     const abEl = document.getElementById('tech-ab')
     if (abEl) abEl.textContent = (ab && ab.total)
       ? `${ab.primary} vs ${ab.shadow}: ${Math.round((ab.agreement_rate||0)*100)}% agree (${ab.total})`
       : ''
-    // Per-author rollup chips
+    // Per-author chips — dry-run vs LIVE edge ("whose technique wins, for real")
     const authors = d.by_author || []
     document.getElementById('tech-authors').innerHTML = authors.length
-      ? authors.map(a => `<span class="badge ${AUTHOR_BADGE[a.author]||'badge-gray'}" style="padding:3px 8px">${a.author} · <span style="color:${wrTint(a.win_rate)}">${a.win_rate!=null?Math.round(a.win_rate*100)+'%':'—'}</span> <span style="opacity:.7">N=${a.sample_count}</span></span>`).join('')
+      ? authors.map(a => {
+          const live = a.live?.sample_count ? ` · <span style="color:${wrTint(a.live.win_rate)}">live ${Math.round(a.live.win_rate*100)}%</span><span style="opacity:.6">·${a.live.sample_count}</span>` : ''
+          const dry = a.dry?.sample_count ? `<span style="color:${wrTint(a.dry.win_rate)}">dry ${Math.round(a.dry.win_rate*100)}%</span><span style="opacity:.6">·${a.dry.sample_count}</span>` : '<span style="opacity:.6">—</span>'
+          return `<span class="badge ${AUTHOR_BADGE[a.author]||'badge-gray'}" style="padding:3px 8px">${a.author} · ${dry}${live}</span>`
+        }).join('')
       : '<span style="color:var(--muted2);font-size:11px">Belum ada outcome ber-atribusi.</span>'
-    // Technique table: entry techniques first (those that open positions), then exits
-    const techs = (d.techniques || []).slice().sort((a,b) => (b.entry?.n||0) - (a.entry?.n||0) || (b.exit?.n||0) - (a.exit?.n||0))
+    // Technique table — DRY-RUN | LIVE | gap columns. Entry techniques first, then exits.
+    const techs = (d.techniques || []).slice().sort((a,b) => ((b.live?.n||0)+(b.entry?.n||0)) - ((a.live?.n||0)+(a.entry?.n||0)) || (b.exit?.n||0) - (a.exit?.n||0))
     document.getElementById('tech-list').innerHTML = techs.map(t => {
       const strat = (t.applies_to||[]).map(s => `<span class="badge ${STRAT_BADGE[s]||'badge-gray'}" style="font-size:8px;padding:0 4px">${STRAT_LABEL[s]||s}</span>`).join(' ')
       const sideTag = t.side === 'exit' ? '<span style="color:var(--muted2);font-size:9px">EXIT</span>' : ''
-      const perf = t.side === 'exit' ? perfStr(t.exit) : perfStr(t.entry)
+      const dry = t.side === 'exit' ? wrCell(t.exit) : wrCell(t.entry)
+      const live = wrCell(t.live)
+      const gap = t.reality_gap != null
+        ? `<span style="color:${t.reality_gap >= 0 ? 'var(--green)' : 'var(--red)'};font-size:10px">${t.reality_gap > 0 ? '+' : ''}${Math.round(t.reality_gap*100)}pp</span>`
+        : '<span style="color:var(--muted2);font-size:10px">—</span>'
       return `<div class="dec-row" style="align-items:center">
-        <div class="dec-main">
+        <div class="dec-main" style="min-width:0">
           <div class="dec-top">
-            <span style="color:var(--fg);font-weight:600;font-size:12px">${t.label}</span>
+            <span style="color:var(--fg);font-weight:600;font-size:12px;overflow:hidden;text-overflow:ellipsis">${t.label}</span>
             <span class="badge ${AUTHOR_BADGE[t.author]||'badge-gray'}">${t.author}</span>
             ${sideTag} ${strat}
           </div>
+          <div style="font-size:10px;color:var(--muted);margin-top:3px;display:flex;gap:12px">
+            <span>dry ${dry}</span><span>live ${live}</span><span title="live − dry-run win-rate">gap ${gap}</span>
+          </div>
         </div>
-        <span style="font-size:11px;white-space:nowrap;flex-shrink:0">${perf}</span>
       </div>`
     }).join('')
   }).catch(() => {})

@@ -44,6 +44,15 @@ const CATALOGUE = [
     side: 'entry', maturity: 'live', applies_to: ['bid_ask', 'spot', 'limit_order'],
   },
 
+  // ── meridian: live execution's own screening (fallback attribution) ────────
+  {
+    id: 'meridian_screener', label: 'Meridian screening (no indicator gate)',
+    author: 'meridian', author_type: 'ai_derived',
+    attribution: 'Meridian entered by its fundamentals screener + strategy router, not an indicator preset',
+    source_ref: 'meridian/tools/screening.js',
+    side: 'entry', maturity: 'live', applies_to: ['bid_ask', 'spot', 'limit_order'],
+  },
+
   // ── classic-ta: ported from Meridian chart-indicators (need OHLCV) ─────────
   {
     id: 'rsi_reversal', label: 'RSI ≤ oversold',

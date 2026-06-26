@@ -60,6 +60,19 @@ app.use(express.static(path.join(__dirname, '../public')))
 
 const { version } = require('../package.json')
 const db = require('./db/database')
+const { recordFeedbackOutcome } = require('./db/schema')
+const { techniqueAuthor } = require('./intelligence/techniques')
+
+// Map a Meridian close_reason to an Argus exit technique id (for live attribution).
+function mapExitTechnique(closeReason) {
+  if (!closeReason) return null
+  const r = String(closeReason).toLowerCase()
+  if (r.includes('supertrend')) return 'supertrend_break'
+  if (r.includes('take') || r.includes('profit') || r.includes('tp')) return 'net_target'
+  if (r.includes('stop') || r.includes('sl')) return 'il_stop'
+  if (r.includes('trail')) return 'net_target'
+  return null  // 'agent decision', 'oor', manual, etc. — no technique-level exit
+}
 
 // ── Auth endpoint (public — no authMiddleware) ────────────────────────────────
 app.post('/api/auth', (req, res) => {
@@ -91,6 +104,7 @@ app.post('/api/feedback', (req, res) => {
     const {
       source, pool_address, strategy, pnl_pct, minutes_held, close_reason,
       volatility, fee_tvl_ratio, price_change_pct, volume_change_pct,
+      entry_technique, exit_technique, outcome_id, token_symbol, fees_earned_usd,
     } = req.body || {}
 
     if (source !== 'meridian') return res.status(400).json({ error: 'source must be meridian' })
@@ -100,6 +114,28 @@ app.post('/api/feedback', (req, res) => {
 
     const bus = require('./core/event-bus')
     const win = pnl_pct > 0
+
+    // Phase 5 — honest live attribution: the technique that gated entry, or 'meridian_screener'
+    // when Meridian entered via its screener with no indicator gate. Author from the registry.
+    const entryTech = entry_technique || 'meridian_screener'
+    const techAuthor = techniqueAuthor(entryTech).author
+    const exitTech = exit_technique || mapExitTechnique(close_reason)
+    // Record the live outcome (deduped on outcome_id) — populated after bucket is known below.
+    const recordLive = (bucket, decisionId) => {
+      try {
+        recordFeedbackOutcome({
+          created_at: new Date().toISOString(),
+          outcome_id: outcome_id || null,
+          source: 'meridian',
+          pool_address, token_symbol: token_symbol || null, strategy,
+          entry_technique: entryTech, technique_author: techAuthor, exit_technique: exitTech || null,
+          pnl_pct, fees_earned_usd: fees_earned_usd ?? null,
+          win: win ? 1 : 0, minutes_held: minutes_held ?? null,
+          close_reason: close_reason || null, condition_bucket: bucket || null,
+          linked_decision_id: decisionId ?? null,
+        })
+      } catch (e) { console.warn('[Argus] feedback_outcome insert:', e.message) }
+    }
 
     // Compute Argus-native condition_bucket from raw metrics
     const volBucket = computeVolBucket(volatility)
@@ -129,8 +165,9 @@ app.post('/api/feedback', (req, res) => {
         win,
         source: 'meridian_unlinked',
       })
-      console.log(`[Argus] Meridian feedback (unlinked): ${pool_address.slice(0, 8)} ${strategy} pnl=${pnl_pct.toFixed(2)}% bucket=${computedBucket}`)
-      return res.json({ ok: true, linked: false, pattern_updated: true, bucket: computedBucket, win })
+      recordLive(computedBucket, null)
+      console.log(`[Argus] Meridian feedback (unlinked): ${pool_address.slice(0, 8)} ${strategy} pnl=${pnl_pct.toFixed(2)}% bucket=${computedBucket} via=${entryTech}`)
+      return res.json({ ok: true, linked: false, pattern_updated: true, bucket: computedBucket, win, technique: entryTech })
     }
 
     // Prefer the linked decision's condition_bucket, fallback to computed
@@ -154,8 +191,9 @@ app.post('/api/feedback', (req, res) => {
       source: 'meridian_feedback',
     })
 
-    console.log(`[Argus] Meridian feedback: ${pool_address.slice(0, 8)} ${strategy} pnl=${pnl_pct.toFixed(2)}% → decision #${decision.id} bucket=${effectiveBucket} win=${win}`)
-    res.json({ ok: true, linked: true, decision_id: decision.id, win, bucket: effectiveBucket })
+    recordLive(effectiveBucket, decision.id)
+    console.log(`[Argus] Meridian feedback: ${pool_address.slice(0, 8)} ${strategy} pnl=${pnl_pct.toFixed(2)}% → decision #${decision.id} bucket=${effectiveBucket} win=${win} via=${entryTech}`)
+    res.json({ ok: true, linked: true, decision_id: decision.id, win, bucket: effectiveBucket, technique: entryTech })
   } catch (e) {
     console.error('[Argus] Feedback error:', e.message)
     res.status(500).json({ error: e.message })
@@ -314,30 +352,51 @@ app.get('/api/techniques/performance', (req, res) => {
     const entryByTech = roll(entryRows)
     const exitByTech  = roll(exitRows)
 
-    // Per-technique registry view (includes zero-sample techniques so the full catalogue shows)
+    // LIVE source (Phase 5): real Meridian outcomes grouped by entry technique.
+    const liveRows = db.prepare(`
+      SELECT entry_technique AS tech, strategy,
+             COUNT(*) AS n,
+             SUM(CASE WHEN win = 1 THEN 1 ELSE 0 END) AS wins,
+             ROUND(AVG(pnl_pct), 3) AS mean_pnl
+      FROM feedback_outcomes
+      WHERE entry_technique IS NOT NULL
+      GROUP BY entry_technique, strategy
+    `).all()
+    const liveByTech = roll(liveRows)
+
+    // Per-technique registry view (includes zero-sample techniques so the full catalogue shows).
+    // reality_gap = live win-rate − dry-run win-rate: how wrong the simulation is for this technique.
     const techniques = reg.map(t => {
       let applies_to = []
       try { applies_to = t.applies_to ? JSON.parse(t.applies_to) : [] } catch {}
+      const entry = entryByTech[t.id] || null
+      const live  = liveByTech[t.id]  || null
+      const reality_gap = (entry?.win_rate != null && live?.win_rate != null)
+        ? Math.round((live.win_rate - entry.win_rate) * 100) / 100 : null
       return {
         id: t.id, label: t.label, author: t.author, author_type: t.author_type,
         side: t.side, maturity: t.maturity, applies_to,
-        entry: entryByTech[t.id] || null,
-        exit:  exitByTech[t.id]  || null,
+        entry, live, exit: exitByTech[t.id] || null, reality_gap,
       }
     })
 
-    // Per-author rollup: "whose technique actually wins" (entry techniques only)
+    // Per-author rollup: dry-run AND live edge side by side ("whose technique wins, for real").
     const authorMap = {}
-    for (const t of reg) {
-      const e = entryByTech[t.id]; if (!e) continue
-      const a = (authorMap[t.author] ||= { author: t.author, author_type: t.author_type, n: 0, wins: 0, pnlSum: 0 })
-      a.n += e.n; a.wins += e.wins; a.pnlSum += (e.mean_pnl_net || 0) * e.n
+    const acc = (src, key) => {
+      for (const t of reg) {
+        const p = src[t.id]; if (!p) continue
+        const a = (authorMap[t.author] ||= { author: t.author, author_type: t.author_type,
+          dry: { n: 0, wins: 0, pnlSum: 0 }, live: { n: 0, wins: 0, pnlSum: 0 } })
+        a[key].n += p.n; a[key].wins += p.wins; a[key].pnlSum += (p.mean_pnl_net || 0) * p.n
+      }
     }
+    acc(entryByTech, 'dry'); acc(liveByTech, 'live')
+    const fin = (g) => ({ sample_count: g.n, wins: g.wins,
+      win_rate: g.n ? Math.round(g.wins / g.n * 100) / 100 : null,
+      mean_pnl_net: g.n ? Math.round(g.pnlSum / g.n * 1000) / 1000 : null })
     const by_author = Object.values(authorMap).map(a => ({
-      author: a.author, author_type: a.author_type, sample_count: a.n, wins: a.wins,
-      win_rate: a.n ? Math.round(a.wins / a.n * 100) / 100 : null,
-      mean_pnl_net: a.n ? Math.round(a.pnlSum / a.n * 1000) / 1000 : null,
-    })).sort((x, y) => (y.win_rate ?? -1) - (x.win_rate ?? -1))
+      author: a.author, author_type: a.author_type, dry: fin(a.dry), live: fin(a.live),
+    })).sort((x, y) => (y.live.win_rate ?? y.dry.win_rate ?? -1) - (x.live.win_rate ?? x.dry.win_rate ?? -1))
 
     // Shadow A/B: for limit_order bb_plus_rsi entries, how often did the shadow agree?
     const shadowRows = db.prepare(`
