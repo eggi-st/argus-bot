@@ -153,8 +153,10 @@ app.post('/api/feedback', (req, res) => {
     if (!decision) {
       // No linked decision — still update Pattern Library if we have enough signal
       if (!computedBucket) {
-        console.log(`[Argus] Meridian feedback for ${pool_address.slice(0, 8)}: no matching decision, no bucket computable — skipped`)
-        return res.json({ ok: true, linked: false, pattern_updated: false })
+        // Pattern Library can't use it (no bucket), but technique attribution still can.
+        recordLive(null, null)
+        console.log(`[Argus] Meridian feedback for ${pool_address.slice(0, 8)}: no decision/bucket — recorded for attribution only (via ${entryTech})`)
+        return res.json({ ok: true, linked: false, pattern_updated: false, technique: entryTech })
       }
       bus.emitSafe('outcome_recorded', {
         position_id:     null,
