@@ -4,6 +4,8 @@ const riskState = require('../core/risk-state')
 const { recordDecision } = require('../db/schema')
 const { getTopCandidates } = require('./screener')
 const { scoreStrategies } = require('./strategy-router')
+const { enrichWithIndicators } = require('./chart-indicators')
+const { techniqueAuthor } = require('./techniques')
 const { getConfig } = require('../config')
 const { parseBucket }      = require('../learning/pattern-updater')
 const { getPattern, adjustScore } = require('../learning/pattern-reader')
@@ -211,6 +213,28 @@ function processPool(pool, cfg, forceStrategy) {
     volume_window: pool.volume_window,
   }
 
+  // Technique provenance (the third axis): which named, authored rule triggered this.
+  // limit_order carries its indicator technique (bb_plus_rsi/ath_pullback); bid_ask/spot
+  // enter via the router gate today. Shadow A/B (supertrend_or_rsi) is recorded, not gated.
+  const primaryTechnique = score.technique || 'vol_feetvl_gate'
+  const techAuthor = score.author || techniqueAuthor(primaryTechnique).author
+  const provenance = {
+    strategy: forceStrategy,
+    condition_bucket: bucket,
+    primary_technique: primaryTechnique,
+    author: techAuthor,
+    confirmations: pool.lo_indicator ? [{
+      technique: pool.lo_indicator.technique, author: pool.lo_indicator.author,
+      confirmed: pool.lo_indicator.confirmed, reason: pool.lo_indicator.reason,
+      skipped: pool.lo_indicator.skipped || false,
+    }] : [],
+    shadow: pool.lo_shadow ? {
+      technique: pool.lo_shadow.technique, confirmed: pool.lo_shadow.confirmed,
+      reason: pool.lo_shadow.reason, skipped: pool.lo_shadow.skipped || false,
+    } : null,
+  }
+  pool.entry_technique = primaryTechnique  // flows into the dry-run position record
+
   try {
     const result = recordDecision({
       created_at: new Date().toISOString(),
@@ -224,6 +248,9 @@ function processPool(pool, cfg, forceStrategy) {
       llm_verdict: null,
       confidence,
       condition_bucket: bucket,
+      primary_technique: primaryTechnique,
+      technique_author: techAuthor,
+      signal_provenance_json: JSON.stringify(provenance),
     })
 
     const decisionId = result.lastInsertRowid
@@ -323,6 +350,13 @@ async function runScan() {
       totalScreened += res.total_screened || 0
       totalCandidates += res.candidates.length
       console.log(`[IC] Pipeline ${pipe.profile}→${pipe.strategy}: ${res.candidates.length} candidate(s)`)
+
+      // Phase 3: gate limit_order on an indicator technique (bb_plus_rsi) + shadow A/B.
+      // Parallel-fetch indicators only for the LO pipeline; failures fall back to the ATH gate.
+      if (pipe.strategy === 'limit_order') {
+        try { await enrichWithIndicators(res.candidates, cfg) }
+        catch (e) { console.warn('[IC] indicator enrich failed:', e.message) }
+      }
 
       for (const pool of res.candidates) {
         const dec = processPool(pool, cfg, pipe.strategy)

@@ -67,13 +67,32 @@ const DEFAULTS = {
     spotFeeTvlMax: 0.4,
   },
   limitOrder: {
-    // Recommend LO when token has pulled back from ATH but isn't dead.
+    // Phase 3: limit_order eligibility is gated by an indicator technique (bb_plus_rsi)
+    // when indicators.enabled, falling back to this ATH gate when OHLCV is unavailable.
     maxPriceVsAthPct: 70,   // token must be ≤ 70% of ATH (some pullback)
     minPriceVsAthPct: 20,   // but not < 20% (potential dead token)
     maxVolatility: 2.0,      // low volatility preferred — stable base for LO entry
     minOrganic: 50,
     minHolders: 500,
     minTvl: 10_000,
+  },
+  // agentMeridian shared API — OHLCV-derived chart indicators (read-only public key).
+  api: {
+    url: process.env.AGENT_MERIDIAN_URL || 'https://api.agentmeridian.xyz/api',
+    publicApiKey: process.env.AGENT_MERIDIAN_KEY || 'bWVyaWRpYW4taXMtdGhlLWJlc3QtYWdlbnRz',
+  },
+  // Indicator-driven entry (Phase 3). Powers limit_order's bb_plus_rsi gate + supertrend_or_rsi
+  // shadow A/B. Pure dip-confirmation matches the bid-below-price mechanic; see the design doc.
+  indicators: {
+    enabled: true,
+    limitOrderEntryPreset: 'bb_plus_rsi',        // primary gate for limit_order
+    limitOrderShadowPreset: 'supertrend_or_rsi', // shadow-recorded for A/B (does not gate)
+    intervals: ['15_MINUTE'],
+    candles: 298,
+    rsiLength: 2,
+    rsiOversold: 30,
+    rsiOverbought: 80,
+    perAttemptTimeoutMs: 8000,
   },
   scan: {
     topCandidateLimit: 10,

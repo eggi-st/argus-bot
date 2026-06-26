@@ -371,10 +371,12 @@ function recordDecision(data) {
   return getStmt('insertDecision', `
     INSERT INTO decisions
       (created_at, expires_at, token_mint, token_symbol, pool_address, strategy,
-       indicators_json, strategy_scores_json, llm_verdict, confidence, condition_bucket)
+       indicators_json, strategy_scores_json, llm_verdict, confidence, condition_bucket,
+       primary_technique, technique_author, signal_provenance_json)
     VALUES
       (@created_at, @expires_at, @token_mint, @token_symbol, @pool_address, @strategy,
-       @indicators_json, @strategy_scores_json, @llm_verdict, @confidence, @condition_bucket)
+       @indicators_json, @strategy_scores_json, @llm_verdict, @confidence, @condition_bucket,
+       @primary_technique, @technique_author, @signal_provenance_json)
   `).run(data)
 }
 

@@ -85,38 +85,50 @@ function scoreStrategies(pool, config) {
   }
 
   // ── LIMIT ORDER ───────────────────────────────────────────────────────────
-  // Only eligible when token has pulled back meaningfully from ATH but isn't dead.
+  // Phase 3: gated by an indicator technique (bb_plus_rsi = pure dip-confirmation, the
+  // correct match for a SOL bid below price) when available — pool.lo_indicator is set by
+  // enrichWithIndicators for the LO pipeline. Falls back to the ATH pullback gate when
+  // indicators are disabled or OHLCV is unavailable (skipped). See the design doc.
   {
-    const maxAth = loCfg.maxPriceVsAthPct ?? 70
-    const minAth = loCfg.minPriceVsAthPct ?? 20
-    const maxVol = loCfg.maxVolatility ?? 2.0
-    const minOrg = loCfg.minOrganic ?? 50
-    const minHld = loCfg.minHolders ?? 500
-    const minTvlLo = loCfg.minTvl ?? 10_000
-
-    let reason = null
-    if (priceVsAth == null)                reason = 'no ATH price data'
-    else if (priceVsAth > maxAth)          reason = `${priceVsAth}% ATH > ${maxAth}% (too close to ATH for LO)`
-    else if (priceVsAth < minAth)          reason = `${priceVsAth}% ATH < ${minAth}% (potentially dead token)`
-    else if (vol != null && vol > maxVol)  reason = `volatility ${vol} > ${maxVol} (too volatile for LO)`
-    else if (organic != null && organic < minOrg) reason = `organic ${organic} < ${minOrg}`
-    else if (holders != null && holders < minHld) reason = `holders ${holders} < ${minHld}`
-    else if (tvl != null && tvl < minTvlLo)      reason = `TVL ${tvl} < ${minTvlLo}`
-
-    if (reason) {
-      scores.push({ strategy: 'limit_order', eligible: false, score: 0, reason })
+    const lo = pool?.lo_indicator
+    if (lo && !lo.skipped) {
+      if (lo.confirmed) {
+        scores.push({ strategy: 'limit_order', eligible: true, score: lo.score ?? 0.6,
+          reason: `${lo.technique}: ${lo.reason}`, technique: lo.technique, author: lo.author })
+      } else {
+        scores.push({ strategy: 'limit_order', eligible: false, score: 0,
+          reason: `${lo.technique} not confirmed: ${lo.reason}`, technique: lo.technique })
+      }
     } else {
-      // Deeper pullback = better LO setup (more margin before ATH resistance)
-      const athRange = maxAth - minAth
-      const pullback = maxAth - priceVsAth  // 0 = at maxAth, athRange = at minAth
-      const pullbackScore = athRange > 0 ? Math.min(1, pullback / athRange) : 0.5
-      const volScore = vol != null ? Math.max(0, 1 - vol / maxVol) : 0.5
-      const orgScore = organic != null ? Math.min(1, organic / 100) : 0.5
-      const score = Math.round((pullbackScore * 0.4 + volScore * 0.3 + orgScore * 0.3) * 100) / 100
-      scores.push({
-        strategy: 'limit_order', eligible: true, score,
-        reason: `ath=${priceVsAth}%, vol=${vol}, organic=${organic}`,
-      })
+      // Fallback: ATH pullback gate (also used when indicators are off/unavailable).
+      const maxAth = loCfg.maxPriceVsAthPct ?? 70
+      const minAth = loCfg.minPriceVsAthPct ?? 20
+      const maxVol = loCfg.maxVolatility ?? 2.0
+      const minOrg = loCfg.minOrganic ?? 50
+      const minHld = loCfg.minHolders ?? 500
+      const minTvlLo = loCfg.minTvl ?? 10_000
+
+      let reason = null
+      if (priceVsAth == null)                reason = 'no ATH price data'
+      else if (priceVsAth > maxAth)          reason = `${priceVsAth}% ATH > ${maxAth}% (too close to ATH for LO)`
+      else if (priceVsAth < minAth)          reason = `${priceVsAth}% ATH < ${minAth}% (potentially dead token)`
+      else if (vol != null && vol > maxVol)  reason = `volatility ${vol} > ${maxVol} (too volatile for LO)`
+      else if (organic != null && organic < minOrg) reason = `organic ${organic} < ${minOrg}`
+      else if (holders != null && holders < minHld) reason = `holders ${holders} < ${minHld}`
+      else if (tvl != null && tvl < minTvlLo)      reason = `TVL ${tvl} < ${minTvlLo}`
+
+      if (reason) {
+        scores.push({ strategy: 'limit_order', eligible: false, score: 0, reason, technique: 'ath_pullback' })
+      } else {
+        const athRange = maxAth - minAth
+        const pullback = maxAth - priceVsAth
+        const pullbackScore = athRange > 0 ? Math.min(1, pullback / athRange) : 0.5
+        const volScore = vol != null ? Math.max(0, 1 - vol / maxVol) : 0.5
+        const orgScore = organic != null ? Math.min(1, organic / 100) : 0.5
+        const score = Math.round((pullbackScore * 0.4 + volScore * 0.3 + orgScore * 0.3) * 100) / 100
+        scores.push({ strategy: 'limit_order', eligible: true, score,
+          reason: `ath=${priceVsAth}%, vol=${vol}, organic=${organic}`, technique: 'ath_pullback' })
+      }
     }
   }
 
