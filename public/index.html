@@ -101,7 +101,7 @@
     .badge-green{background:#052e16;color:#4ade80}.badge-red{background:#1c0606;color:#f87171}
     .badge-yellow{background:#1c1000;color:#fbbf24}.badge-indigo{background:#1e1b4b;color:#a5b4fc}
     .badge-gray{background:var(--bg3);color:#9ca3af}.badge-purple{background:#2e1065;color:#d8b4fe}
-    .badge-blue{background:#0c1a3a;color:#93c5fd}
+    .badge-blue{background:#0c1a3a;color:#93c5fd}.badge-sky{background:#082f3a;color:#7dd3fc}
 
     /* ── Tables ─────────────────────────────────────────────────────────────── */
     .tbl-head{display:grid;gap:10px;padding:0 0 7px;border-bottom:2px solid var(--border);font-size:0.6rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted2);margin-bottom:4px}
@@ -685,8 +685,8 @@ function loadRisk() {
 
 // ── Decisions ──────────────────────────────────────────────────────────────────
 const STRAT_DOT = { spot:'dec-dot-spot', bid_ask:'dec-dot-bidask', limit_order:'dec-dot-lo' }
-const STRAT_BADGE = { spot:'badge-green', bid_ask:'badge-yellow', limit_order:'badge-indigo' }
-const STRAT_LABEL = { spot:'Spot', bid_ask:'Bid Ask', limit_order:'Limit Order' }
+const STRAT_BADGE = { spot:'badge-green', bid_ask:'badge-yellow', limit_order:'badge-indigo', spot_lo:'badge-sky' }
+const STRAT_LABEL = { spot:'Spot', bid_ask:'Bid Ask', limit_order:'Limit Order', spot_lo:'Spot LO' }
 function loadDecisions() {
   apiFetch('/api/candidates?limit=20&status=active').then(r => r.json()).then(d => {
     const el = document.getElementById('decisions-list')

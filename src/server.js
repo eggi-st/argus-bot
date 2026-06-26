@@ -105,6 +105,7 @@ app.post('/api/feedback', (req, res) => {
       source, pool_address, strategy, pnl_pct, minutes_held, close_reason,
       volatility, fee_tvl_ratio, price_change_pct, volume_change_pct,
       entry_technique, exit_technique, outcome_id, token_symbol, fees_earned_usd,
+      position_type,
     } = req.body || {}
 
     if (source !== 'meridian') return res.status(400).json({ error: 'source must be meridian' })
@@ -114,6 +115,12 @@ app.post('/api/feedback', (req, res) => {
 
     const bus = require('./core/event-bus')
     const win = pnl_pct > 0
+
+    // Spot LO distinction: Meridian's limit-order placement is a SOL bid below price tracked as
+    // strategy='spot' + position_type='limit_order'. Mechanically it's NOT in-range spot — folding
+    // it into the 'spot' learner mis-trains it. Map it to a distinct 'spot_lo' and (below) keep it
+    // OUT of the (vol×regime×strategy) pattern learner — Argus tracks its live edge but doesn't gate it.
+    const effectiveStrategy = (position_type === 'limit_order' && strategy === 'spot') ? 'spot_lo' : strategy
 
     // Phase 5 — honest live attribution: the technique that gated entry, or 'meridian_screener'
     // when Meridian entered via its screener with no indicator gate. Author from the registry.
@@ -127,7 +134,7 @@ app.post('/api/feedback', (req, res) => {
           created_at: new Date().toISOString(),
           outcome_id: outcome_id || null,
           source: 'meridian',
-          pool_address, token_symbol: token_symbol || null, strategy,
+          pool_address, token_symbol: token_symbol || null, strategy: effectiveStrategy,
           entry_technique: entryTech, technique_author: techAuthor, exit_technique: exitTech || null,
           pnl_pct, fees_earned_usd: fees_earned_usd ?? null,
           win: win ? 1 : 0, minutes_held: minutes_held ?? null,
@@ -141,6 +148,14 @@ app.post('/api/feedback', (req, res) => {
     const volBucket = computeVolBucket(volatility)
     const regime    = computeRegime(fee_tvl_ratio, price_change_pct, volume_change_pct)
     const computedBucket = (volBucket && regime) ? `${volBucket}_${regime}` : null
+
+    // Spot LO: a Meridian-only execution variant. Record it for attribution but DON'T link it to an
+    // Argus 'spot' decision and DON'T feed the pattern learner — keeps the 'spot' bucket uncontaminated.
+    if (effectiveStrategy === 'spot_lo') {
+      recordLive(computedBucket, null)
+      console.log(`[Argus] Meridian Spot LO: ${pool_address.slice(0, 8)} pnl=${pnl_pct.toFixed(2)}% via=${entryTech} (attribution only)`)
+      return res.json({ ok: true, linked: false, variant: 'spot_lo', technique: entryTech })
+    }
 
     // Find the matching active or recently expired decision for this pool
     const decision = db.prepare(`
