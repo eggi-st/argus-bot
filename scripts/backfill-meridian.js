@@ -85,9 +85,8 @@ async function main() {
     return
   }
 
-  // Throttle so the single-threaded server isn't overwhelmed by hundreds of rapid writes
-  // (the most common cause of mid-run failures). One retry per item; re-runs are idempotent.
-  const DELAY = Number(process.env.DELAY || 50)
+  const DELAY = Number(process.env.DELAY || 40)
+  const ROUNDS = Number(process.env.ROUNDS || 6)
   const sleep = ms => new Promise(r => setTimeout(r, ms))
   const postOnce = async (body) => {
     const res = await fetch(`${ARGUS}/api/feedback`, {
@@ -98,22 +97,36 @@ async function main() {
     return { ok: res.ok, status: res.status, j, text }
   }
 
-  let ok = 0, dup = 0, fail = 0
-  const failures = []
-  for (const body of payloads) {
-    let r
-    try {
-      r = await postOnce(body)
-      if (!r.ok) { await sleep(300); r = await postOnce(body) }   // one retry
-    } catch (e) { r = { ok: false, status: 0, text: e.message } }
-    if (r.ok) { ok++; if (r.j.deduped || r.j.pattern_updated === false) dup++ }
-    else { fail++; if (failures.length < 5) failures.push({ pool: body.pool_address?.slice(0, 8), status: r.status, body: (r.text || '').slice(0, 140) }) }
-    if ((ok + fail) % 50 === 0) console.log(`  …${ok + fail}/${payloads.length} (ok=${ok} dup=${dup} fail=${fail})`)
-    if (DELAY) await sleep(DELAY)
+  // Convergent retry: items that fail (e.g. during a 15-min scan window when the single-threaded
+  // server briefly can't accept connections) are retried in later rounds, with a pause between
+  // rounds so the scan finishes. Idempotent on outcome_id, so retries never double-count.
+  let ok = 0, dup = 0
+  let pending = payloads.slice()
+  let lastFails = []
+  for (let round = 1; round <= ROUNDS && pending.length; round++) {
+    const stillFailed = []
+    lastFails = []
+    for (const body of pending) {
+      let r
+      try { r = await postOnce(body) } catch (e) { r = { ok: false, status: 0, text: e.message } }
+      if (r.ok) { ok++; if (r.j.deduped || r.j.pattern_updated === false) dup++ }
+      else { stillFailed.push(body); if (lastFails.length < 5) lastFails.push({ pool: body.pool_address?.slice(0, 8), status: r.status, body: (r.text || '').slice(0, 120) }) }
+      if (DELAY) await sleep(DELAY)
+    }
+    console.log(`round ${round}: ${pending.length - stillFailed.length} landed, ${stillFailed.length} still failing`)
+    if (!stillFailed.length) { pending = []; break }
+    if (stillFailed.length === pending.length && round > 1) { console.log('no progress this round — server likely down; stopping'); pending = stillFailed; break }
+    pending = stillFailed
+    if (pending.length) await sleep(3000)   // let any in-progress scan finish before the next round
   }
-  console.log(`\nDONE. ok=${ok} (incl. already-present dedup=${dup})  failed=${fail}`)
-  if (failures.length) { console.log('first failures (status + body):'); failures.forEach(f => console.log('  ', JSON.stringify(f))) }
-  console.log('Re-run is safe (idempotent on outcome_id). Then check feedback_outcomes + the "live" column.')
+
+  console.log(`\nDONE. ok=${ok} (already-present dedup=${dup})  unresolved=${pending.length}`)
+  if (pending.length) {
+    console.log('still-failing sample (status + body):'); lastFails.forEach(f => console.log('  ', JSON.stringify(f)))
+    console.log(`Re-run the same command — idempotent; the ${pending.length} unresolved will retry, everything else dedups.`)
+  } else {
+    console.log('All entries landed. Check feedback_outcomes + the Technique Attribution "live" column.')
+  }
 }
 
 main().catch(e => { console.error('backfill error:', e.message); process.exit(1) })
