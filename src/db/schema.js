@@ -350,11 +350,14 @@ function migrateSchema() {
         minutes_held      INTEGER,
         close_reason      TEXT,
         condition_bucket  TEXT,
-        linked_decision_id INTEGER
+        linked_decision_id INTEGER,
+        features_json     TEXT                  -- full rich feature set per position (Meridian)
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_outcome_id ON feedback_outcomes(outcome_id) WHERE outcome_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_feedback_tech ON feedback_outcomes(entry_technique, strategy);
     `)
+    // Existing dbs (VPS): add the rich-features column if missing (fresh dbs already have it).
+    try { db.exec(`ALTER TABLE feedback_outcomes ADD COLUMN features_json TEXT`) } catch {}
   } catch (e) {
     if (!e.message?.includes('already exists')) console.warn('[Schema] feedback_outcomes:', e.message)
   }
@@ -457,11 +460,11 @@ function recordFeedbackOutcome(data) {
     INSERT OR IGNORE INTO feedback_outcomes
       (created_at, outcome_id, source, pool_address, token_symbol, strategy,
        entry_technique, technique_author, exit_technique, pnl_pct, fees_earned_usd,
-       win, minutes_held, close_reason, condition_bucket, linked_decision_id)
+       win, minutes_held, close_reason, condition_bucket, linked_decision_id, features_json)
     VALUES
       (@created_at, @outcome_id, @source, @pool_address, @token_symbol, @strategy,
        @entry_technique, @technique_author, @exit_technique, @pnl_pct, @fees_earned_usd,
-       @win, @minutes_held, @close_reason, @condition_bucket, @linked_decision_id)
+       @win, @minutes_held, @close_reason, @condition_bucket, @linked_decision_id, @features_json)
   `).run(data)
   return r.changes > 0
 }

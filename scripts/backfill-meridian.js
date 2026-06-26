@@ -36,6 +36,28 @@ function loadPerf() {
   return Array.isArray(data.performance) ? data.performance : []
 }
 
+// Pull a field from the record top-level OR its nested signal_snapshot.
+function feat(p, key) { return p[key] ?? p.signal_snapshot?.[key] ?? null }
+
+// The rich per-position feature set Argus stores (features_json) for long-term analysis.
+function buildFeatures(p) {
+  const keys = [
+    'volatility', 'fee_tvl_ratio', 'organic_score', 'holder_count',
+    'entry_mcap', 'entry_tvl', 'entry_volume', 'entry_holders',
+    'top10_pct', 'bundle_pct', 'bot_holders_pct', 'smart_wallets_count', 'smart_wallets_present',
+    'flow_imbalance', 'volume_change_pct', 'price_change_pct', 'price_vs_ath_pct',
+    'token_age_hours', 'bin_step', 'range_efficiency', 'minutes_in_range', 'rebalance_count',
+    'decided_by', 'candidate_score', 'launchpad_type', 'deployer_blocked',
+    'pnl_usd', 'pnl_net_usd', 'tx_cost_usd', 'stressed', 'peak_pnl_pct',
+  ]
+  const f = {}
+  for (const k of keys) { const v = feat(p, k); if (v != null) f[k] = v }
+  // derived: TVL/mcap ratio (EvilPanda's exit-liquidity-trap signal) when both present
+  const mc = feat(p, 'entry_mcap'), tv = feat(p, 'entry_tvl')
+  if (mc > 0 && tv != null) f.tvl_mcap_ratio = Math.round((tv / mc) * 1000) / 1000
+  return f
+}
+
 // Map one stored performance entry → the /api/feedback payload Meridian's live relay sends.
 function toPayload(p) {
   const pool = p.pool
@@ -57,6 +79,7 @@ function toPayload(p) {
     position_type: p.position_type ?? null,            // old entries: null → can't split Spot LO
     token_symbol: (p.pool_name || '').split('-')[0] || null,
     outcome_id: `${pool}:${p.deployed_at || p.recorded_at || ''}`,   // stable → dedup on re-run
+    features: buildFeatures(p),                          // rich feature set → features_json in Argus
   }
 }
 

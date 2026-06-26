@@ -114,8 +114,9 @@ app.post('/api/feedback', (req, res) => {
       source, pool_address, strategy, pnl_pct, minutes_held, close_reason,
       volatility, fee_tvl_ratio, price_change_pct, volume_change_pct,
       entry_technique, exit_technique, outcome_id, token_symbol, fees_earned_usd,
-      position_type,
+      position_type, features,
     } = req.body || {}
+    const featuresJson = (features && typeof features === 'object') ? JSON.stringify(features) : null
 
     if (source !== 'meridian') return res.status(400).json({ error: 'source must be meridian' })
     if (!pool_address || !strategy || pnl_pct == null) {
@@ -123,9 +124,25 @@ app.post('/api/feedback', (req, res) => {
     }
 
     // Idempotency: if this exact close was already recorded (backfill re-run / double-relay), skip
-    // ENTIRELY — never re-update pattern_library or re-link decisions. feedback_outcomes is the marker.
-    if (outcome_id && db.prepare('SELECT 1 FROM feedback_outcomes WHERE outcome_id = ? LIMIT 1').get(outcome_id)) {
-      return res.json({ ok: true, deduped: true })
+    // the learner ENTIRELY. But ENRICH it — if the existing row has no rich features yet and this
+    // payload carries them, backfill the features_json (a re-backfill enriches the old thin rows
+    // without re-firing pattern_library). feedback_outcomes is the marker.
+    if (outcome_id) {
+      const existing = db.prepare('SELECT id, features_json FROM feedback_outcomes WHERE outcome_id = ? LIMIT 1').get(outcome_id)
+      if (existing) {
+        const newF = (req.body?.features && typeof req.body.features === 'object') ? req.body.features : null
+        if (newF) {
+          // MERGE features (union) so the direct push (full set) + relay combine regardless of
+          // arrival order; a re-backfill enriches old thin rows. Only write if it changes something.
+          let cur = {}; try { cur = existing.features_json ? JSON.parse(existing.features_json) : {} } catch {}
+          const merged = JSON.stringify({ ...cur, ...newF })
+          if (merged !== (existing.features_json || '{}')) {
+            db.prepare('UPDATE feedback_outcomes SET features_json = ? WHERE id = ?').run(merged, existing.id)
+            return res.json({ ok: true, enriched: true })
+          }
+        }
+        return res.json({ ok: true, deduped: true })
+      }
     }
 
     const bus = require('./core/event-bus')
@@ -154,7 +171,7 @@ app.post('/api/feedback', (req, res) => {
           pnl_pct, fees_earned_usd: fees_earned_usd ?? null,
           win: win ? 1 : 0, minutes_held: minutes_held ?? null,
           close_reason: close_reason || null, condition_bucket: bucket || null,
-          linked_decision_id: decisionId ?? null,
+          linked_decision_id: decisionId ?? null, features_json: featuresJson,
         })
       } catch (e) { console.warn('[Argus] feedback_outcome insert:', e.message) }
     }
