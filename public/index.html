@@ -81,7 +81,11 @@
     .stat-metric-value{font-weight:600;text-align:right;overflow-wrap:anywhere;min-width:0}
 
     /* ── Cards ──────────────────────────────────────────────────────────────── */
-    .card{background:#0d1117;border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px}
+    /* Grid items default to min-width:auto (=min-content), which lets nowrap
+       content blow a 1fr track wider than the viewport. Force min-width:0 so
+       tracks shrink and inner text truncates instead of overflowing. */
+    .dash-grid > *,.hv-grid > *,.stat-row > *{min-width:0}
+    .card{background:#0d1117;border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px;min-width:0}
     .card-title{font-size:0.67rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted2);margin-bottom:14px;display:flex;align-items:center;justify-content:space-between}
     .card-title span{font-size:11px;color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none}
 
