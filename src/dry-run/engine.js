@@ -186,17 +186,20 @@ async function updateOpenPositions() {
         //   currentPrice → impermanent loss. computeSingleSidedPnlPct() models this from the range
         //   width (range_pct). This REPLACES the old symmetric token-hold proxy, which wrongly
         //   credited full token upside that a SOL-only position never earns.
-        // Fee income (computeSimulatedFeePct) is a conservative, capped ESTIMATE in pp, not a full
-        //   DLMM fee model. net_pnl_pct = single-sided position P&L + capped fee − slippage.
         const feeCfg        = getConfig().dryRun || {}
         const feeWindowMins = pos.fee_window_minutes ?? SNAPSHOT_TF_MINUTES
-        const simulatedFeePct = computeSimulatedFeePct(
-          pos.entry_fee_rate ?? null, holdMinutes, feeWindowMins,
-          { simulateFees: feeCfg.simulateFees, maxFeePct: feeCfg.maxSimulatedFeePct, inRangeFactor: feeCfg.inRangeFactor }
-        )
-
         const rangeFraction  = pos.range_pct ?? rangePctForStrategy(pos.strategy, null)
         const grossPnlPct    = computeSingleSidedPnlPct(pos.entry_price_sol, currentPrice, rangeFraction)
+        // Fees are earned only while the market price is inside the LP range (bins below entry).
+        // Estimate the fraction of the range that price actually penetrated; 0 when price stayed
+        // above entry (the common ttl_expired case — SOL sits idle, no swaps, no fee income).
+        const inRangeFraction = (currentPrice < pos.entry_price_sol)
+          ? Math.min(1, (pos.entry_price_sol - currentPrice) / (pos.entry_price_sol * rangeFraction))
+          : 0
+        const simulatedFeePct = computeSimulatedFeePct(
+          pos.entry_fee_rate ?? null, holdMinutes, feeWindowMins,
+          { simulateFees: feeCfg.simulateFees, maxFeePct: feeCfg.maxSimulatedFeePct, inRangeFactor: inRangeFraction }
+        )
         // Net P&L = single-sided position P&L + capped fee estimate − slippage both ways (all in pp)
         const slipBothWays   = (pos.simulated_slippage_pct ?? 0.3) * 2
         const finalNetPnlPct = grossPnlPct + simulatedFeePct - slipBothWays

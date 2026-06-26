@@ -246,6 +246,7 @@ function getRejectReason(pool, s) {
   if (pool?.base_token_has_high_single_ownership === true) return 'high single ownership'
   if (pool?.pool_type && pool.pool_type !== 'dlmm') return `not dlmm (${pool.pool_type})`
   if (quoteSymbol !== 'SOL' && quoteSymbol !== 'WSOL') return `quote=${quote?.symbol || '?'} (not SOL)`
+  if (!(pool?.pool_price > 0)) return 'no pool_price from API'
 
   const binStep = num(pool?.dlmm_params?.bin_step)
   const tvl = num(pool?.tvl ?? pool?.active_tvl)
