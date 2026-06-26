@@ -33,7 +33,16 @@ const RATE_LIMIT_WINDOW = 60 * 1000
 const RATE_LIMIT_MAX = 120
 const rateLimitMap = new Map()
 
+function isLocalhost(req) {
+  const ip = (req.ip || req.socket?.remoteAddress || '').replace('::ffff:', '')
+  return ip === '127.0.0.1' || ip === '::1' || ip === 'localhost'
+}
+
 function rateLimiter(req, res, next) {
+  // /api/feedback is a trusted, intentionally-bursty server-to-server endpoint: Meridian relays
+  // each close twice and the backfill posts in bulk. Exempt it from localhost so those aren't
+  // throttled (a 429 there silently drops real learning data). Dashboard/auth stay rate-limited.
+  if (req.path === '/api/feedback' && isLocalhost(req)) return next()
   const ip = req.ip || req.socket?.remoteAddress || 'unknown'
   const now = Date.now()
   let entry = rateLimitMap.get(ip)
