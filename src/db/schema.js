@@ -171,6 +171,14 @@ function migrateSchema() {
     `ALTER TABLE pattern_library ADD COLUMN wins INTEGER DEFAULT 0`,
     `ALTER TABLE pattern_library ADD COLUMN ema_win_rate REAL`,
     `ALTER TABLE pattern_library ADD COLUMN last_reconciled_at TEXT`,
+    // Technique provenance (2026-06-26): the third axis — which technique/author triggered
+    // this decision. Additive + nullable; see docs/TECHNIQUE-MAP-AND-PROVENANCE.md.
+    `ALTER TABLE decisions ADD COLUMN primary_technique TEXT`,
+    `ALTER TABLE decisions ADD COLUMN technique_author TEXT`,
+    `ALTER TABLE decisions ADD COLUMN signal_provenance_json TEXT`,
+    // Dry-run: record which technique opened/closed the position (replaces blind ttl_expired).
+    `ALTER TABLE dry_run_positions ADD COLUMN entry_technique TEXT`,
+    `ALTER TABLE dry_run_positions ADD COLUMN exit_technique TEXT`,
   ]
   let added = 0
   for (const sql of cols) {
@@ -297,6 +305,55 @@ function migrateSchema() {
     if (!e.message?.includes('already exists')) console.warn('[Schema] Sig index migration:', e.message)
   }
   if (added) console.log(`[Schema] Added ${added} column(s) via migration`)
+
+  // techniques registry — the third axis (provenance). Seeded from the static catalogue.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS techniques (
+        id            TEXT PRIMARY KEY,
+        label         TEXT NOT NULL,
+        author        TEXT NOT NULL,
+        author_type   TEXT NOT NULL CHECK(author_type IN ('classic_ta','community','ai_derived','user')),
+        attribution   TEXT,
+        source_ref    TEXT,
+        side          TEXT CHECK(side IN ('entry','exit','both')),
+        applies_to    TEXT,
+        maturity      TEXT DEFAULT 'proposed',
+        version       INTEGER DEFAULT 1,
+        created_at    TEXT NOT NULL
+      );
+    `)
+    seedTechniques()
+  } catch (e) {
+    if (!e.message?.includes('already exists')) console.warn('[Schema] techniques:', e.message)
+  }
+}
+
+// Seed/refresh the technique registry from the static catalogue. INSERT OR REPLACE so
+// catalogue edits (label, attribution, applies_to) propagate on restart without losing rows.
+function seedTechniques() {
+  const { CATALOGUE } = require('../intelligence/techniques')
+  const now = new Date().toISOString()
+  const stmt = db.prepare(`
+    INSERT INTO techniques (id, label, author, author_type, attribution, source_ref, side, applies_to, maturity, version, created_at)
+    VALUES (@id, @label, @author, @author_type, @attribution, @source_ref, @side, @applies_to, @maturity, @version, @created_at)
+    ON CONFLICT(id) DO UPDATE SET
+      label=excluded.label, author=excluded.author, author_type=excluded.author_type,
+      attribution=excluded.attribution, source_ref=excluded.source_ref, side=excluded.side,
+      applies_to=excluded.applies_to, maturity=excluded.maturity, version=excluded.version
+  `)
+  const tx = db.transaction(rows => {
+    for (const t of rows) {
+      stmt.run({
+        id: t.id, label: t.label, author: t.author, author_type: t.author_type,
+        attribution: t.attribution ?? null, source_ref: t.source_ref ?? null,
+        side: t.side ?? null, applies_to: JSON.stringify(t.applies_to ?? []),
+        maturity: t.maturity ?? 'proposed', version: t.version ?? 1, created_at: now,
+      })
+    }
+  })
+  tx(CATALOGUE)
+  console.log(`[Schema] Seeded ${CATALOGUE.length} technique(s)`)
 }
 
 // ── Command Queue helpers ─────────────────────────────────────────────────────
