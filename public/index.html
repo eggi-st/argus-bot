@@ -74,10 +74,10 @@
     .stat-label{font-size:0.67rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted2);margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .stat-value{font-size:1.5rem;font-weight:700;letter-spacing:-.02em;line-height:1.1}
     .stat-sub{font-size:0.68rem;color:var(--muted);margin-top:4px}
-    .stat-metric{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px}
+    .stat-metric{display:flex;justify-content:space-between;align-items:flex-start;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px}
     .stat-metric:last-child{border-bottom:none}
-    .stat-metric-label{color:var(--muted);flex-shrink:0}
-    .stat-metric-value{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;max-width:58%}
+    .stat-metric-label{color:var(--muted);flex-shrink:0;padding-right:8px}
+    .stat-metric-value{font-weight:600;text-align:right;overflow-wrap:anywhere;min-width:0}
 
     /* ── Cards ──────────────────────────────────────────────────────────────── */
     .card{background:#0d1117;border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px}
@@ -1017,8 +1017,8 @@ function loadScanStatus() {
     const sc = d.last_scan
     if (!sc) { info.textContent = '—'; return }
     const ago = Math.round((Date.now() - new Date(sc.ts).getTime()) / 60000)
-    const agoStr = ago < 1 ? 'baru' : ago + 'm'
-    info.textContent = `${agoStr} · ${sc.total_screened ?? 0}scr · ${sc.decisions ?? 0}dec`
+    const agoStr = ago < 1 ? 'baru saja' : ago + 'm lalu'
+    info.textContent = `${agoStr} · ${sc.total_screened ?? 0} screened · ${sc.decisions ?? 0} dec`
   }).catch(() => {})
 }
 
