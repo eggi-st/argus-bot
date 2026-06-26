@@ -577,6 +577,7 @@ function switchPage(id) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'))
   document.getElementById('page-' + id).classList.add('active')
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.page === id))
+  window.scrollTo(0, 0)
   PAGE_LOADERS[id]?.()
 }
 
