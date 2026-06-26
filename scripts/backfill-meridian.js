@@ -85,20 +85,35 @@ async function main() {
     return
   }
 
-  let ok = 0, dup = 0, fail = 0
-  for (const body of payloads) {
-    try {
-      const res = await fetch(`${ARGUS}/api/feedback`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-      })
-      const j = await res.json().catch(() => ({}))
-      if (res.ok) { ok++; if (j.pattern_updated === false && j.variant !== 'spot_lo') dup++ }
-      else fail++
-    } catch { fail++ }
-    if ((ok + fail) % 25 === 0) console.log(`  …${ok + fail}/${payloads.length}`)
+  // Throttle so the single-threaded server isn't overwhelmed by hundreds of rapid writes
+  // (the most common cause of mid-run failures). One retry per item; re-runs are idempotent.
+  const DELAY = Number(process.env.DELAY || 50)
+  const sleep = ms => new Promise(r => setTimeout(r, ms))
+  const postOnce = async (body) => {
+    const res = await fetch(`${ARGUS}/api/feedback`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })
+    const text = await res.text().catch(() => '')
+    let j = {}; try { j = JSON.parse(text) } catch {}
+    return { ok: res.ok, status: res.status, j, text }
   }
-  console.log(`\nDONE. posted=${ok} failed=${fail}  (re-runs dedup on outcome_id)`)
-  console.log('Check: feedback_outcomes count + the Technique Attribution "live" column.')
+
+  let ok = 0, dup = 0, fail = 0
+  const failures = []
+  for (const body of payloads) {
+    let r
+    try {
+      r = await postOnce(body)
+      if (!r.ok) { await sleep(300); r = await postOnce(body) }   // one retry
+    } catch (e) { r = { ok: false, status: 0, text: e.message } }
+    if (r.ok) { ok++; if (r.j.deduped || r.j.pattern_updated === false) dup++ }
+    else { fail++; if (failures.length < 5) failures.push({ pool: body.pool_address?.slice(0, 8), status: r.status, body: (r.text || '').slice(0, 140) }) }
+    if ((ok + fail) % 50 === 0) console.log(`  …${ok + fail}/${payloads.length} (ok=${ok} dup=${dup} fail=${fail})`)
+    if (DELAY) await sleep(DELAY)
+  }
+  console.log(`\nDONE. ok=${ok} (incl. already-present dedup=${dup})  failed=${fail}`)
+  if (failures.length) { console.log('first failures (status + body):'); failures.forEach(f => console.log('  ', JSON.stringify(f))) }
+  console.log('Re-run is safe (idempotent on outcome_id). Then check feedback_outcomes + the "live" column.')
 }
 
 main().catch(e => { console.error('backfill error:', e.message); process.exit(1) })

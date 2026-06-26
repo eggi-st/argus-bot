@@ -113,6 +113,12 @@ app.post('/api/feedback', (req, res) => {
       return res.status(400).json({ error: 'pool_address, strategy, pnl_pct required' })
     }
 
+    // Idempotency: if this exact close was already recorded (backfill re-run / double-relay), skip
+    // ENTIRELY — never re-update pattern_library or re-link decisions. feedback_outcomes is the marker.
+    if (outcome_id && db.prepare('SELECT 1 FROM feedback_outcomes WHERE outcome_id = ? LIMIT 1').get(outcome_id)) {
+      return res.json({ ok: true, deduped: true })
+    }
+
     const bus = require('./core/event-bus')
     const win = pnl_pct > 0
 
@@ -173,6 +179,7 @@ app.post('/api/feedback', (req, res) => {
         console.log(`[Argus] Meridian feedback for ${pool_address.slice(0, 8)}: no decision/bucket — recorded for attribution only (via ${entryTech})`)
         return res.json({ ok: true, linked: false, pattern_updated: false, technique: entryTech })
       }
+      recordLive(computedBucket, null)   // dedup marker first, before the pattern-learner update
       bus.emitSafe('outcome_recorded', {
         position_id:     null,
         condition_bucket: computedBucket,
@@ -182,7 +189,6 @@ app.post('/api/feedback', (req, res) => {
         win,
         source: 'meridian_unlinked',
       })
-      recordLive(computedBucket, null)
       console.log(`[Argus] Meridian feedback (unlinked): ${pool_address.slice(0, 8)} ${strategy} pnl=${pnl_pct.toFixed(2)}% bucket=${computedBucket} via=${entryTech}`)
       return res.json({ ok: true, linked: false, pattern_updated: true, bucket: computedBucket, win, technique: entryTech })
     }
@@ -197,6 +203,7 @@ app.post('/api/feedback', (req, res) => {
       WHERE id = ?
     `).run(pnl_pct, win ? 1 : 0, decision.id)
 
+    recordLive(effectiveBucket, decision.id)   // dedup marker first, before the pattern-learner update
     bus.emitSafe('outcome_recorded', {
       position_id:      decision.id,
       condition_bucket: effectiveBucket,
@@ -208,7 +215,6 @@ app.post('/api/feedback', (req, res) => {
       source: 'meridian_feedback',
     })
 
-    recordLive(effectiveBucket, decision.id)
     console.log(`[Argus] Meridian feedback: ${pool_address.slice(0, 8)} ${strategy} pnl=${pnl_pct.toFixed(2)}% → decision #${decision.id} bucket=${effectiveBucket} win=${win} via=${entryTech}`)
     res.json({ ok: true, linked: true, decision_id: decision.id, win, bucket: effectiveBucket, technique: entryTech })
   } catch (e) {
