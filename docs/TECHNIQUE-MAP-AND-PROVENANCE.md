@@ -334,6 +334,19 @@ Revised order:
    + shadow-A/B agreement); "Technique Attribution" card on the Patterns page;
    technique badge on Active Decisions rows. No new table — attribution, not gating.
 5. **Meridian feedback carries technique** → real-execution edge per author.
+   ✅ **SHIPPED 2026-06-26** (Argus 6997488 + Meridian 72288bf). Meridian sends
+   entry_technique + a stable outcome_id with each live outcome; Argus stores them in
+   `feedback_outcomes` (LIVE, deduped), resolves the author, and the attribution endpoint
+   exposes dry-run vs live + `reality_gap` (live_wr − dryrun_wr) per technique and author.
+   Honest attribution: entry_technique or `meridian_screener` when no indicator gated entry.
+
+### Reality-gap → the path to a smarter brain (Phase 6 hook)
+The dual-source data now supports the next evolution: feed proven LIVE technique edge back
+into gating/confidence (weight live > dry-run; discount dry-run for techniques whose
+reality_gap is consistently negative). Phase 5 deliberately does NOT gate on this yet —
+it accumulates the data first. The flywheel: dry-run explores all techniques → Meridian
+executes the best live → live outcomes calibrate the dry-run + validate techniques →
+better selection → better live results.
 
 ---
 
