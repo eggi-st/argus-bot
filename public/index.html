@@ -34,8 +34,8 @@
     ::-webkit-scrollbar{width:4px;height:4px}
     ::-webkit-scrollbar-track{background:transparent}
     ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
-    html{overflow-x:clip}
-    body{background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Courier New",monospace;font-size:13px;line-height:1.5;overscroll-behavior:none;overflow-x:hidden}
+    html,body{overflow-x:clip}
+    body{background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Courier New",monospace;font-size:13px;line-height:1.5;overscroll-behavior:none}
 
     /* ── Sidebar ────────────────────────────────────────────────────────────── */
     #sidebar{position:fixed;left:0;top:0;height:100%;width:64px;background:#0d1117;border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:14px 0 18px;gap:1px;z-index:50}
@@ -105,7 +105,7 @@
     .tbl-row:last-child{border-bottom:none}
 
     /* ── Decision rows ──────────────────────────────────────────────────────── */
-    .dec-row{display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px solid #0d1117}
+    .dec-row{display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px solid #0d1117;max-width:100%;overflow:hidden}
     .dec-row:last-child{border-bottom:none}
     .dec-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;margin-top:5px}
     .dec-dot-spot{background:#22c55e;box-shadow:0 0 4px rgba(34,197,94,.5)}
