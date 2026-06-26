@@ -110,6 +110,9 @@ function openForDecision(decisionId, pool, strategy) {
       entry_fee_rate:        pool.fee_active_tvl_ratio ?? null,
       fee_window_minutes:    SNAPSHOT_TF_MINUTES,
       range_pct:             rangePctForStrategy(strategy, pool.bin_step),
+      // Entry-technique provenance. bid_ask/spot enter via the router gate today;
+      // limit_order's bb_plus_rsi trigger is wired in Phase 3. (See techniques registry.)
+      entry_technique:       pool.entry_technique ?? 'vol_feetvl_gate',
     })
     console.log(`[DryRun] Opened #${result.lastInsertRowid}: ${pool.base.symbol} → ${strategy} @ ${pool.price} SOL (${solAmount} SOL stake)`)
   } catch (e) {
@@ -135,9 +138,14 @@ async function updateOpenPositions() {
   if (!positions.length) return
 
   const cfg = getConfig()
-  const stopLoss     = -(cfg.dryRun?.stopLossPct     ?? 20)
-  const takeProfit   =  (cfg.dryRun?.takeProfitPct   ?? 50)
-  const maxHoldMins  =  (cfg.dryRun?.maxHoldMinutes  ?? 240)
+  const drCfg = cfg.dryRun || {}
+  // Phase 2 — outcome-driven, single-sided-aware exits (replaces blind ttl_expired).
+  // These act on the computed P&L, not the raw token move, so a price rise (which never
+  // fills a SOL bid below entry) is NOT mistaken for profit.
+  const netTargetPct = drCfg.netTargetPct ?? 5    // net (gross + fee − slip) ≥ this → take profit
+  const ilStopPct    = drCfg.ilStopPct    ?? 15   // single-sided IL ≤ −this → stop loss
+  const runUpExitPct = drCfg.runUpExitPct ?? 30   // price ran ≥ this above entry → bid dead, reclaim SOL
+  const maxHoldMins  = drCfg.maxHoldMinutes ?? 240 // time-bound fallback (decoupled from short rec-TTL)
 
   console.log(`[DryRun] Updating ${positions.length} open position(s)`)
 
@@ -166,44 +174,40 @@ async function updateOpenPositions() {
         continue  // wait for next cycle to close — just entered
       }
 
-      const priceMovePct = ((currentPrice - pos.entry_price_sol) / pos.entry_price_sol) * 100  // raw token move (exit signal)
+      const priceMovePct = ((currentPrice - pos.entry_price_sol) / pos.entry_price_sol) * 100  // raw token move
       const holdMinutes  = Math.floor((Date.now() - new Date(pos.opened_at).getTime()) / 60_000)
-      const decExpired   = pos.decision_expires_at && new Date(pos.decision_expires_at) < new Date()
 
-      // Exit triggers use the raw token price move as a position-management signal:
-      //   price dumping → stop out; price ran far above the range → withdraw (SOL intact, opportunity over).
-      const closeReason =
-        stopLoss    != null && priceMovePct < stopLoss   ? 'stop_loss'    :
-        takeProfit  != null && priceMovePct > takeProfit ? 'take_profit'  :
-        holdMinutes > maxHoldMins                         ? 'max_hold'     :
-        decExpired                                        ? 'ttl_expired'  :
-        null
+      // ── Compute prospective P&L every cycle (single-sided SOL model) ──────────
+      // Meridian deploys SOL-only liquidity as a "bid" in bins BELOW entry:
+      //   price rises → SOL never converts → 0 price P&L (fees only);
+      //   price dips into range → that fraction of SOL buys the token below entry → IL.
+      const feeWindowMins = pos.fee_window_minutes ?? SNAPSHOT_TF_MINUTES
+      const rangeFraction = pos.range_pct ?? rangePctForStrategy(pos.strategy, null)
+      const grossPnlPct   = computeSingleSidedPnlPct(pos.entry_price_sol, currentPrice, rangeFraction)
+      // Fill fraction = share of SOL that actually swapped into the token (0 when price stayed
+      // above entry — the bid never filled). Drives BOTH fee income and slippage.
+      const fillFraction  = (currentPrice < pos.entry_price_sol)
+        ? Math.min(1, (pos.entry_price_sol - currentPrice) / (pos.entry_price_sol * rangeFraction))
+        : 0
+      const simulatedFeePct = computeSimulatedFeePct(
+        pos.entry_fee_rate ?? null, holdMinutes, feeWindowMins,
+        { simulateFees: drCfg.simulateFees, maxFeePct: drCfg.maxSimulatedFeePct, inRangeFactor: fillFraction }
+      )
+      // SLIPPAGE REALISM (Phase 2): only the SOL that actually swapped pays slippage. A bid that
+      // never fills (price ran up) costs ~0 — NOT the old flat 0.6% that floored every no-fill at −0.6%.
+      const slipCost       = (pos.simulated_slippage_pct ?? 0.3) * 2 * fillFraction
+      const finalNetPnlPct = grossPnlPct + simulatedFeePct - slipCost
+
+      // ── Outcome-driven exit decision (recorded as exit_technique) ─────────────
+      // Acts on computed P&L, not raw price move — a price rise never "profits" a SOL bid below entry.
+      // Hold is decoupled from the short recommendation TTL: positions live until a real exit fires.
+      let closeReason = null, exitTechnique = null
+      if (finalNetPnlPct >= netTargetPct)    { closeReason = 'take_profit';  exitTechnique = 'net_target' }
+      else if (grossPnlPct <= -ilStopPct)    { closeReason = 'stop_loss';    exitTechnique = 'il_stop' }
+      else if (priceMovePct >= runUpExitPct) { closeReason = 'price_ran_up'; exitTechnique = 'price_ran_up' }
+      else if (holdMinutes >= maxHoldMins)   { closeReason = 'max_hold';     exitTechnique = 'max_hold' }
 
       if (closeReason) {
-        // SINGLE-SIDED SOL P&L: Meridian deploys SOL-only liquidity as a "bid" in bins BELOW entry.
-        //   price rises → SOL never converts → ~0 price P&L (only fees);
-        //   price dips into range → that fraction of SOL buys the token below entry, now worth
-        //   currentPrice → impermanent loss. computeSingleSidedPnlPct() models this from the range
-        //   width (range_pct). This REPLACES the old symmetric token-hold proxy, which wrongly
-        //   credited full token upside that a SOL-only position never earns.
-        const feeCfg        = getConfig().dryRun || {}
-        const feeWindowMins = pos.fee_window_minutes ?? SNAPSHOT_TF_MINUTES
-        const rangeFraction  = pos.range_pct ?? rangePctForStrategy(pos.strategy, null)
-        const grossPnlPct    = computeSingleSidedPnlPct(pos.entry_price_sol, currentPrice, rangeFraction)
-        // Fees are earned only while the market price is inside the LP range (bins below entry).
-        // Estimate the fraction of the range that price actually penetrated; 0 when price stayed
-        // above entry (the common ttl_expired case — SOL sits idle, no swaps, no fee income).
-        const inRangeFraction = (currentPrice < pos.entry_price_sol)
-          ? Math.min(1, (pos.entry_price_sol - currentPrice) / (pos.entry_price_sol * rangeFraction))
-          : 0
-        const simulatedFeePct = computeSimulatedFeePct(
-          pos.entry_fee_rate ?? null, holdMinutes, feeWindowMins,
-          { simulateFees: feeCfg.simulateFees, maxFeePct: feeCfg.maxSimulatedFeePct, inRangeFactor: inRangeFraction }
-        )
-        // Net P&L = single-sided position P&L + capped fee estimate − slippage both ways (all in pp)
-        const slipBothWays   = (pos.simulated_slippage_pct ?? 0.3) * 2
-        const finalNetPnlPct = grossPnlPct + simulatedFeePct - slipBothWays
-
         closeDryRunPosition(pos.id, {
           closed_at:          new Date().toISOString(),
           exit_price_sol:     currentPrice,
@@ -211,9 +215,12 @@ async function updateOpenPositions() {
           net_pnl_pct:        Math.round(finalNetPnlPct  * 100) / 100,
           hold_minutes:       holdMinutes,
           close_reason:       closeReason,
+          exit_technique:     exitTechnique,
           exit_metrics_json:  JSON.stringify({
             ...(exitSnapshot || {}),
             price_move_pct: Math.round(priceMovePct * 100) / 100,
+            fill_fraction:  Math.round(fillFraction * 100) / 100,
+            slip_cost_pct:  Math.round(slipCost * 100) / 100,
             range_pct:      rangeFraction,
             model:          'single_sided_sol',
           }),
@@ -318,6 +325,7 @@ function bootstrap() {
         entry_fee_rate:         null,   // not available at bootstrap — filled later if possible
         fee_window_minutes:     SNAPSHOT_TF_MINUTES,
         range_pct:              rangePctForStrategy(dec.strategy, null),
+        entry_technique:        'vol_feetvl_gate',
       })
       console.log(`[DryRun] Bootstrap: opened position for orphaned decision #${dec.id} (${dec.token_symbol})`)
     } catch (e) {

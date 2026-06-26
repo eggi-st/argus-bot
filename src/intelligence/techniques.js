@@ -102,6 +102,36 @@ const CATALOGUE = [
     side: 'entry', maturity: 'battle_tested', applies_to: ['bid_ask', 'limit_order'],
   },
 
+  // ── argus-ai: outcome-driven dry-run EXIT rules (Phase 2) ──────────────────
+  {
+    id: 'net_target', label: 'Net P&L ≥ target',
+    author: 'argus-ai', author_type: 'ai_derived',
+    attribution: 'Close when net (gross + fees − fill-scaled slippage) reaches the target — fee yield captured',
+    source_ref: 'argus/src/dry-run/engine.js',
+    side: 'exit', maturity: 'live', applies_to: ['bid_ask', 'spot', 'limit_order'],
+  },
+  {
+    id: 'il_stop', label: 'Impermanent-loss stop',
+    author: 'argus-ai', author_type: 'ai_derived',
+    attribution: 'Close when single-sided IL (price dumped through the range) breaches the stop',
+    source_ref: 'argus/src/dry-run/engine.js',
+    side: 'exit', maturity: 'live', applies_to: ['bid_ask', 'spot', 'limit_order'],
+  },
+  {
+    id: 'price_ran_up', label: 'Price ran up — bid dead',
+    author: 'argus-ai', author_type: 'ai_derived',
+    attribution: 'Single-sided SOL bid placed below entry never fills once price runs far above — reclaim idle SOL',
+    source_ref: 'argus/src/dry-run/engine.js',
+    side: 'exit', maturity: 'live', applies_to: ['bid_ask', 'spot', 'limit_order'],
+  },
+  {
+    id: 'max_hold', label: 'Max hold window',
+    author: 'argus-ai', author_type: 'ai_derived',
+    attribution: 'Time-bound fallback exit (decoupled from the short recommendation TTL)',
+    source_ref: 'argus/src/dry-run/engine.js',
+    side: 'exit', maturity: 'live', applies_to: ['bid_ask', 'spot', 'limit_order'],
+  },
+
   // ── community: named, empirical, attributed to a person ────────────────────
   {
     id: 'bonus_stage', label: 'Fast Bid-Ask, Bonus Stage',

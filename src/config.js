@@ -150,11 +150,13 @@ const DEFAULTS = {
   dryRun: {
     // Virtual stake per position (SOL)
     solAmount: 0.1,
-    // Close conditions
-    stopLossPct: 20,      // close if price drops > 20% from entry
-    takeProfitPct: 50,    // close if price rises > 50% from entry
-    maxHoldMinutes: 240,  // close after 4 hours regardless
-    // Fee simulation (net_pnl = price move + fee estimate − slippage).
+    // ── Phase 2 outcome-driven exits (single-sided-aware; act on computed P&L) ──
+    // Hold is decoupled from the short recommendation TTL so a real exit can be observed.
+    netTargetPct: 5,      // take profit when net (gross + fee − slip) ≥ this
+    ilStopPct: 15,        // stop loss when single-sided IL ≤ −this
+    runUpExitPct: 30,     // price ran ≥ this above entry → SOL bid won't fill, reclaim capital
+    maxHoldMinutes: 240,  // time-bound fallback (4h)
+    // Fee simulation (net_pnl = single-sided P&L + fee estimate − fill-scaled slippage).
     // CONSERVATIVE by design: fees are a capped estimate, NOT an IL-modeled LP return.
     simulateFees: true,
     maxSimulatedFeePct: 10,   // cap fee credit (pp) so extreme pool yields can't dominate

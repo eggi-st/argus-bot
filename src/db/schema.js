@@ -391,11 +391,11 @@ function recordDryRunPosition(data) {
     INSERT INTO dry_run_positions
       (decision_id, opened_at, token_mint, token_symbol, pool_address, strategy,
        entry_price_sol, entry_bin, range_bins, sol_amount, simulated_slippage_pct, tx_cost_usd,
-       entry_fee_rate, fee_window_minutes, range_pct)
+       entry_fee_rate, fee_window_minutes, range_pct, entry_technique)
     VALUES
       (@decision_id, @opened_at, @token_mint, @token_symbol, @pool_address, @strategy,
        @entry_price_sol, @entry_bin, @range_bins, @sol_amount, @simulated_slippage_pct, @tx_cost_usd,
-       @entry_fee_rate, @fee_window_minutes, @range_pct)
+       @entry_fee_rate, @fee_window_minutes, @range_pct, @entry_technique)
   `).run(data)
 }
 
@@ -410,6 +410,7 @@ function closeDryRunPosition(id, data) {
         close_reason       = @close_reason,
         exit_metrics_json  = @exit_metrics_json,
         simulated_fee_pct  = @simulated_fee_pct,
+        exit_technique     = @exit_technique,
         outcome_valid      = 1,
         status             = 'closed'
     WHERE id = @id

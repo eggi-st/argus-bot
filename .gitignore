@@ -3,6 +3,11 @@ node_modules/
 data/
 logs/
 *.log
+*.db
+*.db-shm
+*.db-wal
+check_db.js
+_*.js
 .DS_Store
 desktop.ini
 user-config.json
