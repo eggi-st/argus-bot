@@ -318,12 +318,16 @@ Revised order:
    table, seed catalogue (§4), additive decision/position columns, UI shows
    author on open pools. *Pure attribution, zero risk.* ✅ **SHIPPED 2026-06-26.**
 2. **Exit by technique (3-lite)**: replace blind `ttl_expired` with
-   outcome-driven exits (price TP/SL + `supertrend_break` / RSI-overbought) →
-   realistic P&L for **all** strategies. *Prerequisite for step 3's test.*
+   outcome-driven exits (net_target / il_stop / price_ran_up / max_hold) +
+   fill-scaled slippage → realistic P&L for **all** strategies.
+   ✅ **SHIPPED 2026-06-26** (commit cd3a054). Also fixed the −0.6% floor
+   (flat round-trip slippage charged on bids that never filled).
 3. **limit_order trigger swap + shadow A/B**: gate limit_order on `bb_plus_rsi`
-   via agentMeridian (fallback to ATH when OHLCV unavailable); run
-   `supertrend_or_rsi` as a parallel shadow technique. Dry-run only — let
-   `pattern_library` measure which entry actually wins.
+   via agentMeridian (fallback to ATH when OHLCV unavailable); record
+   `supertrend_or_rsi` as a parallel shadow for `pattern_library` to compare.
+   ✅ **SHIPPED 2026-06-26** (commit ef35336). Live proof: first-ever
+   limit_order decision (ZINC, RSI 16.9 + price below lower band); gate rejected
+   6 RSI-oversold-but-not-below-band candidates.
 4. **Secondary technique learning** `(technique × strategy)` + attribution dashboard.
 5. **Meridian feedback carries technique** → real-execution edge per author.
 
