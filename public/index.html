@@ -51,7 +51,8 @@
     /* ── Header ─────────────────────────────────────────────────────────────── */
     header{position:fixed;top:0;left:64px;right:0;height:52px;background:#0d1117;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 24px;gap:16px;z-index:40}
     header h1{font-size:13px;font-weight:700;letter-spacing:3px;color:var(--text)}
-    header h1 span{color:var(--muted);font-weight:400;letter-spacing:1px;margin-left:6px;font-size:11px}
+    header h1 #hdr-page{color:#9ca3af;font-weight:500;letter-spacing:.6px;margin-left:8px;font-size:12px}
+    header h1 .ver{color:var(--muted2);font-weight:400;letter-spacing:1px;margin-left:8px;font-size:10px}
     #hdr-status{display:flex;align-items:center;gap:6px;margin-left:auto;font-size:11px;color:var(--muted)}
     #status-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .3s}
     #status-dot.online{background:var(--green);animation:pulse-dot 2.5s infinite}
@@ -196,7 +197,7 @@
       /* Header — prevent wrapping, hide verbose items */
       header{left:0;padding:0 12px;gap:8px}
       header h1{white-space:nowrap}
-      header h1 span{display:none}
+      header h1 .ver{display:none}
       #hdr-ts{display:none}
       #hdr-status{gap:4px}
       /* Sidebar → bottom bar */
@@ -278,7 +279,7 @@
 
 <!-- Header -->
 <header>
-  <h1>ARGUS <span>v0.4.0</span></h1>
+  <h1>ARGUS <span id="hdr-page">Dashboard</span> <span class="ver">v0.4.0</span></h1>
   <div id="hdr-status">
     <div id="status-dot"></div>
     <span id="conn-text" style="font-size:11px">Connecting…</span>
@@ -290,12 +291,6 @@
 
 <!-- ═══ Pages ══════════════════════════════════════════════════════════════════ -->
 <div id="main">
-
-  <!-- Page title (updated by switchPage) -->
-  <div id="page-title-bar" style="padding:16px 0 6px;border-bottom:1px solid var(--border);margin-bottom:18px">
-    <h2 id="page-title" style="font-size:1.15rem;font-weight:700;color:#e5e7eb;margin:0;letter-spacing:.01em">Dashboard</h2>
-    <div id="page-sub" style="font-size:12px;color:var(--muted);margin-top:3px">Ringkasan live &amp; keputusan aktif</div>
-  </div>
 
   <!-- ── Dashboard ──────────────────────────────────────────────────────────── -->
   <div class="page active" id="page-dash">
@@ -607,21 +602,14 @@ const PAGE_LOADERS = {
   brain:    () => { loadSelfReport(); loadCapabilityGaps(); loadTuningEvents() },
 }
 const PAGE_TITLES = {
-  dash:     ['Dashboard',  'Ringkasan live & keputusan aktif'],
-  dryrun:   ['Dry Run',    'Simulasi paper-trade — bukan eksekusi nyata'],
-  patterns: ['Patterns',   'Pattern library & atribusi teknik'],
-  hivemind: ['Hivemind',   'Sumber discovery & smart money wallets'],
-  wallet:   ['Wallet',     'Observer aksi on-chain (smart money & own)'],
-  log:      ['Log',        'Outcome nyata Meridian & rejection log'],
-  brain:    ['Brain',      'Self-learning: capability gaps & tuning'],
+  dash: 'Dashboard', dryrun: 'Dry Run', patterns: 'Patterns',
+  hivemind: 'Hivemind', wallet: 'Wallet', log: 'Log', brain: 'Brain',
 }
 function switchPage(id) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'))
   document.getElementById('page-' + id).classList.add('active')
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.page === id))
-  const [title, sub] = PAGE_TITLES[id] || [id, '']
-  const tEl = document.getElementById('page-title'); if (tEl) tEl.textContent = title
-  const sEl = document.getElementById('page-sub');   if (sEl) sEl.textContent = sub
+  const pg = document.getElementById('hdr-page'); if (pg) pg.textContent = PAGE_TITLES[id] || id
   window.scrollTo(0, 0)
   PAGE_LOADERS[id]?.()
 }
