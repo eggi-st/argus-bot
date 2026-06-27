@@ -291,6 +291,12 @@
 <!-- ═══ Pages ══════════════════════════════════════════════════════════════════ -->
 <div id="main">
 
+  <!-- Page title (updated by switchPage) -->
+  <div id="page-title-bar" style="padding:16px 0 6px;border-bottom:1px solid var(--border);margin-bottom:18px">
+    <h2 id="page-title" style="font-size:1.15rem;font-weight:700;color:#e5e7eb;margin:0;letter-spacing:.01em">Dashboard</h2>
+    <div id="page-sub" style="font-size:12px;color:var(--muted);margin-top:3px">Ringkasan live &amp; keputusan aktif</div>
+  </div>
+
   <!-- ── Dashboard ──────────────────────────────────────────────────────────── -->
   <div class="page active" id="page-dash">
     <div id="cb-alert">⛔ Circuit Breaker TERBUKA — <span id="cb-reason"></span></div>
@@ -600,10 +606,22 @@ const PAGE_LOADERS = {
   log:      () => { loadRejections(); loadFeedbackHistory() },
   brain:    () => { loadSelfReport(); loadCapabilityGaps(); loadTuningEvents() },
 }
+const PAGE_TITLES = {
+  dash:     ['Dashboard',  'Ringkasan live & keputusan aktif'],
+  dryrun:   ['Dry Run',    'Simulasi paper-trade — bukan eksekusi nyata'],
+  patterns: ['Patterns',   'Pattern library & atribusi teknik'],
+  hivemind: ['Hivemind',   'Sumber discovery & smart money wallets'],
+  wallet:   ['Wallet',     'Observer aksi on-chain (smart money & own)'],
+  log:      ['Log',        'Outcome nyata Meridian & rejection log'],
+  brain:    ['Brain',      'Self-learning: capability gaps & tuning'],
+}
 function switchPage(id) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'))
   document.getElementById('page-' + id).classList.add('active')
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.page === id))
+  const [title, sub] = PAGE_TITLES[id] || [id, '']
+  const tEl = document.getElementById('page-title'); if (tEl) tEl.textContent = title
+  const sEl = document.getElementById('page-sub');   if (sEl) sEl.textContent = sub
   window.scrollTo(0, 0)
   PAGE_LOADERS[id]?.()
 }
