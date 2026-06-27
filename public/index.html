@@ -813,21 +813,31 @@ function loadDryRun() {
     if (!closed.length) {
       closedEl.innerHTML = '<div class="empty">Belum ada posisi closed.</div>'
     } else {
-      const COLS = '100px 80px 75px 75px 55px 105px 70px'
-      const header = `<div class="tbl-head" style="grid-template-columns:${COLS}"><span>Token</span><span>Strategy</span><span>Net P&L</span><span>Gross</span><span>Hold</span><span>Opened</span><span>Exit</span></div>`
+      const COLS = '95px 78px 68px 70px 56px 46px 98px 64px'
+      const header = `<div class="tbl-head" style="grid-template-columns:${COLS}"><span>Token</span><span>Strategy</span><span title="Harga + fee − slippage (hasil akhir)">Net P&L</span><span title="P&L dari pergerakan harga saja / impermanent loss — belum termasuk fee">Harga/IL</span><span title="Pendapatan fee LP (capped ~10%)">Fees</span><span>Hold</span><span>Opened</span><span>Exit</span></div>`
       const rows = closed.slice(0, 30).map(p => {
         const dexUrl = p.token_mint ? `https://dexscreener.com/solana/${p.token_mint}` : null
         const tok = dexUrl
           ? `<a href="${dexUrl}" target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">${p.token_symbol||p.token_mint?.slice(0,8)||'?'}</a>`
           : `<b>${p.token_symbol||'?'}</b>`
+        // No-fill: single-sided bid never entered range → no IL, no fees, net 0
+        const noFill = p.net_pnl_pct === 0 && p.gross_pnl_pct === 0
         const pnl = p.net_pnl_pct
-        const pnlEl = pnl != null ? `<span style="font-weight:700;color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'}">${pnl >= 0 ? '+' : ''}${pnl}%</span>` : '—'
-        const gross = p.gross_pnl_pct != null ? `<span style="color:${p.gross_pnl_pct >= 0 ? 'var(--green)' : 'var(--red);'}opacity:.7">${p.gross_pnl_pct >= 0 ? '+' : ''}${p.gross_pnl_pct}%</span>` : '—'
+        const pnlEl = noFill
+          ? `<span style="color:var(--muted)">—</span>`
+          : (pnl != null ? `<span style="font-weight:700;color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'}">${pnl >= 0 ? '+' : ''}${pnl}%</span>` : '—')
+        const gross = noFill ? `<span style="color:var(--muted)">—</span>`
+          : (p.gross_pnl_pct != null ? `<span style="color:${p.gross_pnl_pct >= 0 ? 'var(--green)' : 'var(--red)'};opacity:.7">${p.gross_pnl_pct >= 0 ? '+' : ''}${p.gross_pnl_pct}%</span>` : '—')
+        const fee = p.simulated_fee_pct
+        const feeEl = noFill ? `<span style="color:var(--muted)">—</span>`
+          : (fee != null ? `<span style="color:var(--green);opacity:.7">+${(Math.round(fee*100)/100)}%</span>` : '—')
         const exitR = inferExit(p)
         const inferred = !p.close_reason && exitR
-        const exitEl = `<span style="color:${EXIT_COLOR[exitR]||'var(--muted)'};font-weight:600">${EXIT_LABEL[exitR]||'?'}${inferred ? '<span style="opacity:.4">?</span>' : ''}</span>`
+        const exitEl = noFill
+          ? `<span class="badge badge-gray" style="font-size:10px">no fill</span>`
+          : `<span style="color:${EXIT_COLOR[exitR]||'var(--muted)'};font-weight:600">${EXIT_LABEL[exitR]||'?'}${inferred ? '<span style="opacity:.4">?</span>' : ''}</span>`
         const openedStr = p.opened_at ? new Date(p.opened_at).toLocaleString('id-ID',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—'
-        return `<div class="tbl-row" style="grid-template-columns:${COLS}">${tok}<span><span class="badge ${STRAT_BADGE[p.strategy]||'badge-gray'}">${STRAT_LABEL[p.strategy]||p.strategy}</span></span>${pnlEl}${gross}<span style="color:var(--muted)">${p.hold_minutes != null ? p.hold_minutes+'m' : '—'}</span><span style="color:var(--muted);font-size:11px">${openedStr}</span>${exitEl}</div>`
+        return `<div class="tbl-row" style="grid-template-columns:${COLS}">${tok}<span><span class="badge ${STRAT_BADGE[p.strategy]||'badge-gray'}">${STRAT_LABEL[p.strategy]||p.strategy}</span></span>${pnlEl}${gross}${feeEl}<span style="color:var(--muted)">${p.hold_minutes != null ? p.hold_minutes+'m' : '—'}</span><span style="color:var(--muted);font-size:11px">${openedStr}</span>${exitEl}</div>`
       }).join('')
       closedEl.innerHTML = `<div class="tbl-wrap">${header + rows}</div>`
     }
@@ -1070,9 +1080,9 @@ function loadFeedbackHistory() {
       tbl.innerHTML = '<div class="empty">Menunggu outcome pertama dari Meridian…</div>'
       return
     }
-    const COLS = '50px 90px 85px 75px 70px 130px 1fr'
+    const COLS = '50px 78px 78px 100px 65px 52px 110px 1fr'
     const header = `<div class="tbl-head" style="grid-template-columns:${COLS}">
-      <span>Waktu</span><span>Token</span><span>Strategy</span>
+      <span>Waktu</span><span>Token</span><span>Strategy</span><span>Technique</span>
       <span>P&L Real</span><span>Win?</span><span>Bucket</span><span>Pool</span>
     </div>`
     const rows = outcomes.map(o => {
@@ -1088,6 +1098,9 @@ function loadFeedbackHistory() {
       const winEl = o.win === 1
         ? `<span class="badge badge-green">W</span>`
         : `<span class="badge badge-red">L</span>`
+      const techEl = o.entry_technique
+        ? `<span class="badge ${AUTHOR_BADGE[o.technique_author]||'badge-gray'}" title="${o.technique_author||''}${o.exit_technique ? ' · exit: '+o.exit_technique : ''}" style="font-size:9px">${o.entry_technique}</span>`
+        : '<span style="color:var(--muted)">—</span>'
       const bucket = (o.condition_bucket || '').replace(/_/g, ' ') || '—'
       const pool = o.pool_address
         ? `<a href="https://app.meteora.ag/dlmm/${o.pool_address}" target="_blank" style="color:var(--muted);font-size:10px;text-decoration:none">${o.pool_address.slice(0,10)}…</a>`
@@ -1096,6 +1109,7 @@ function loadFeedbackHistory() {
         <span style="color:var(--muted);font-size:11px">${ts}</span>
         ${tok}
         <span><span class="badge ${STRAT_BADGE[o.strategy]||'badge-gray'}">${STRAT_LABEL[o.strategy]||o.strategy}</span></span>
+        <span>${techEl}</span>
         ${pnlEl}
         ${winEl}
         <span style="color:var(--muted2);font-size:11px">${bucket}</span>

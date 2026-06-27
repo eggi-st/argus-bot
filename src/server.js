@@ -691,21 +691,25 @@ app.post('/api/tuning-events/:id/reject', express.json(), (req, res) => {
 app.get('/api/feedback/history', (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit || '40', 10), 200)
+    // Source: feedback_outcomes — the LIVE ground-truth of every real Meridian close
+    // (deduped on outcome_id). Previously this read `decisions WHERE outcome_known=1`,
+    // which only surfaced outcomes that linked to an independent Argus decision and so
+    // hid most real Meridian executions + carried no technique attribution.
     const rows = db.prepare(`
-      SELECT id, created_at, token_symbol, token_mint, pool_address,
-             strategy, condition_bucket, confidence,
-             outcome_pnl_pct, outcome_known, win,
-             status, followed
-      FROM decisions
-      WHERE outcome_known = 1
+      SELECT id, created_at, token_symbol, pool_address,
+             strategy, condition_bucket,
+             pnl_pct AS outcome_pnl_pct, win,
+             entry_technique, technique_author, exit_technique,
+             close_reason, minutes_held
+      FROM feedback_outcomes
       ORDER BY created_at DESC LIMIT ?
     `).all(limit)
     const stats = db.prepare(`
       SELECT COUNT(*) AS total,
              SUM(CASE WHEN win = 1 THEN 1 ELSE 0 END) AS wins,
-             AVG(outcome_pnl_pct) AS avg_pnl,
-             SUM(outcome_pnl_pct) AS total_pnl
-      FROM decisions WHERE outcome_known = 1
+             AVG(pnl_pct) AS avg_pnl,
+             SUM(pnl_pct) AS total_pnl
+      FROM feedback_outcomes
     `).get()
     res.json({ outcomes: rows, stats })
   } catch (e) {
