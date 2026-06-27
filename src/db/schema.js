@@ -460,10 +460,10 @@ function closeDryRunPosition(id, data) {
         exit_metrics_json  = @exit_metrics_json,
         simulated_fee_pct  = @simulated_fee_pct,
         exit_technique     = @exit_technique,
-        outcome_valid      = 1,
+        outcome_valid      = @outcome_valid,
         status             = 'closed'
     WHERE id = @id
-  `).run({ ...data, id })
+  `).run({ outcome_valid: 1, ...data, id })
 }
 
 // Phase 5: insert a live Meridian outcome. INSERT OR IGNORE on outcome_id dedups

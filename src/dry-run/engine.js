@@ -163,7 +163,24 @@ async function updateOpenPositions() {
         const d = await getDexscreenerPrice(pos.token_mint)
         currentPrice = d?.price_sol ?? null
       }
-      if (currentPrice == null) continue
+      if (currentPrice == null) {
+        // Pool delisted from Meteora + DexScreener timeout → can't price it. Don't let it hang
+        // open forever (which also blocks the time-based max_hold). Past max_hold, force-close as
+        // stale with outcome_valid=0 so it's freed from the open set but EXCLUDED from learning
+        // (we never observed a real outcome).
+        const holdMins = Math.floor((Date.now() - new Date(pos.opened_at).getTime()) / 60_000)
+        if (holdMins >= maxHoldMins) {
+          closeDryRunPosition(pos.id, {
+            closed_at: new Date().toISOString(), exit_price_sol: null,
+            gross_pnl_pct: 0, net_pnl_pct: 0, hold_minutes: holdMins,
+            close_reason: 'max_hold_no_price', exit_technique: 'max_hold',
+            exit_metrics_json: JSON.stringify({ model: 'single_sided_sol', no_price: true }),
+            simulated_fee_pct: 0, outcome_valid: 0,
+          })
+          console.log(`[DryRun] Force-closed #${pos.id} ${pos.token_symbol} at max_hold — no price (hold=${holdMins}m, excluded from learning)`)
+        }
+        continue
+      }
       try { recordTokenPrice(pos.token_mint, currentPrice, new Date().toISOString()) } catch {}
 
       // Bootstrap: fill entry price if it was null at open time
