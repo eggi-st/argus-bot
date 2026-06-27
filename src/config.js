@@ -139,6 +139,11 @@ const DEFAULTS = {
     // (which widens for small N and re-evaluates continuously) carry the ongoing statistical
     // discipline, so the promotion threshold need not be the full power-justified ~63.
     promotionThreshold: 45,
+    // STEP 1 reality-anchor: a (bucket×strategy) pattern uses REAL Meridian outcomes
+    // (feedback_outcomes) once it has >= minRealSamples; below that it falls back to dry-run
+    // SIM but is flagged source='sim' and treated as NEUTRAL by adjustScore (no confidence
+    // boost) — because dry-run sim was proven optimistic (+5.5% vs reality −0.1%).
+    minRealSamples: 20,
     reconcileEnabled: true,
     reconcileCron: '0 */6 * * *',
     // Phase 3b — deterministic self-diagnosis. Opens a capability_gaps row only when a reason

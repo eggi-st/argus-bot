@@ -3,7 +3,7 @@ const db = require('../db/database')
 
 function getPattern(volatilityBucket, regime, strategy) {
   return db.prepare(`
-    SELECT win_rate, mean_pnl_net, sample_count, active, wins, ema_win_rate
+    SELECT win_rate, mean_pnl_net, sample_count, active, wins, ema_win_rate, source
     FROM pattern_library
     WHERE volatility_bucket = ? AND regime = ? AND strategy = ?
     LIMIT 1
@@ -41,6 +41,9 @@ function getBaseRate(strategy, cfg) {
  */
 function adjustScore(rawScore, pattern, cfg, strategy) {
   if (!pattern?.active) return rawScore
+  // STEP 1: sim-backed patterns are NEUTRAL — never let an unverified (simulation-only)
+  // win rate boost live confidence. Only REAL-outcome-backed patterns adjust the score.
+  if (pattern.source === 'sim') return rawScore
   const L = (cfg && cfg.learning) || {}
   const w = L.patternWeight ?? 0.30
   const k = L.shrinkageK ?? 20

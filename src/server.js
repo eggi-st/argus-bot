@@ -385,7 +385,8 @@ app.get('/api/pattern-library', (req, res) => {
   try {
     const rows = db.prepare(`
       SELECT volatility_bucket, regime, strategy, win_rate, mean_pnl_net,
-             sample_count, active, updated_at
+             sample_count, active, updated_at,
+             source, live_sample_count, sim_sample_count, reality_gap
       FROM pattern_library
       ORDER BY sample_count DESC, active DESC
     `).all()

@@ -957,15 +957,20 @@ function loadPatternLibrary() {
           const avgPnl = p.mean_pnl_net != null ? p.mean_pnl_net.toFixed(2) : null
           const wrColor = wr >= 60 ? 'var(--green)' : wr >= 40 ? 'var(--yellow)' : 'var(--red)'
           const pnlColor = p.mean_pnl_net > 0 ? 'var(--green)' : 'var(--red)'
+          const srcBadge = p.source === 'real'
+            ? `<span class="badge badge-green" title="Berbasis outcome NYATA Meridian (${p.live_sample_count} close)" style="font-size:8px">real</span>`
+            : `<span class="badge badge-gray" title="Simulasi (belum cukup data nyata) — netral, tidak menaikkan confidence" style="font-size:8px">sim</span>`
+          const gap = p.reality_gap != null
+            ? `<span title="WR nyata − WR simulasi" style="color:${p.reality_gap >= 0 ? 'var(--green)' : 'var(--red)'};font-size:.6rem">gap ${p.reality_gap >= 0 ? '+' : ''}${Math.round(p.reality_gap*100)}pp</span>` : ''
           return `<div class="pat-card active-pat">
             <div style="font-size:11px;font-weight:700;margin-bottom:4px">${p.volatility_bucket} × ${p.regime}</div>
-            <div style="margin-bottom:6px"><span class="badge ${STRAT_BADGE[p.strategy]||'badge-gray'}">${STRAT_LABEL[p.strategy]||p.strategy}</span></div>
+            <div style="margin-bottom:6px;display:flex;gap:4px;align-items:center"><span class="badge ${STRAT_BADGE[p.strategy]||'badge-gray'}">${STRAT_LABEL[p.strategy]||p.strategy}</span>${srcBadge}</div>
             <div style="display:flex;justify-content:space-between;font-size:12px">
               <span style="color:${wrColor};font-weight:700">${wr != null ? wr + '%' : '—'} WR</span>
               <span style="color:${pnlColor}">${avgPnl != null ? (p.mean_pnl_net >= 0 ? '+' : '') + avgPnl + '%' : '—'}</span>
             </div>
             <div class="pat-wr-bar"><div class="pat-wr-fill" style="width:${wr ?? 0}%;background:${wrColor}"></div></div>
-            <div style="font-size:.6rem;color:var(--muted2);margin-top:5px">N=${p.sample_count} · updated ${new Date(p.updated_at).toLocaleDateString('id-ID')}</div>
+            <div style="font-size:.6rem;color:var(--muted2);margin-top:5px">N=${p.sample_count} · ${gap || 'updated ' + new Date(p.updated_at).toLocaleDateString('id-ID')}</div>
           </div>`
         }).join('') + '</div>'
       }

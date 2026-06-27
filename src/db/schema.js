@@ -171,6 +171,16 @@ function migrateSchema() {
     `ALTER TABLE pattern_library ADD COLUMN wins INTEGER DEFAULT 0`,
     `ALTER TABLE pattern_library ADD COLUMN ema_win_rate REAL`,
     `ALTER TABLE pattern_library ADD COLUMN last_reconciled_at TEXT`,
+    // STEP 1 reality-anchor (2026-06-27): pattern_library can be backed by REAL Meridian
+    // outcomes (feedback_outcomes) instead of only dry-run sim. source='real'|'sim';
+    // live_* = real rollup, sim_* = dry-run rollup, reality_gap = live_wr − sim_wr.
+    `ALTER TABLE pattern_library ADD COLUMN source TEXT`,
+    `ALTER TABLE pattern_library ADD COLUMN live_win_rate REAL`,
+    `ALTER TABLE pattern_library ADD COLUMN live_mean_pnl REAL`,
+    `ALTER TABLE pattern_library ADD COLUMN live_sample_count INTEGER DEFAULT 0`,
+    `ALTER TABLE pattern_library ADD COLUMN sim_win_rate REAL`,
+    `ALTER TABLE pattern_library ADD COLUMN sim_sample_count INTEGER DEFAULT 0`,
+    `ALTER TABLE pattern_library ADD COLUMN reality_gap REAL`,
     // Technique provenance (2026-06-26): the third axis — which technique/author triggered
     // this decision. Additive + nullable; see docs/TECHNIQUE-MAP-AND-PROVENANCE.md.
     `ALTER TABLE decisions ADD COLUMN primary_technique TEXT`,
@@ -502,8 +512,10 @@ function recordWalletAction(data) {
 function recordPatternReconciled(vb, regime, strategy, d) {
   return getStmt('reconcilePattern', `
     INSERT INTO pattern_library
-      (updated_at, volatility_bucket, regime, strategy, win_rate, mean_pnl_net, sample_count, active, wins, last_reconciled_at)
-    VALUES (@updated_at, @vb, @regime, @strategy, @win_rate, @mean_pnl_net, @sample_count, @active, @wins, @last_reconciled_at)
+      (updated_at, volatility_bucket, regime, strategy, win_rate, mean_pnl_net, sample_count, active, wins, last_reconciled_at,
+       source, live_win_rate, live_mean_pnl, live_sample_count, sim_win_rate, sim_sample_count, reality_gap)
+    VALUES (@updated_at, @vb, @regime, @strategy, @win_rate, @mean_pnl_net, @sample_count, @active, @wins, @last_reconciled_at,
+       @source, @live_win_rate, @live_mean_pnl, @live_sample_count, @sim_win_rate, @sim_sample_count, @reality_gap)
     ON CONFLICT(volatility_bucket, regime, strategy) DO UPDATE SET
       updated_at         = excluded.updated_at,
       win_rate           = excluded.win_rate,
@@ -511,8 +523,17 @@ function recordPatternReconciled(vb, regime, strategy, d) {
       sample_count       = excluded.sample_count,
       active             = excluded.active,
       wins               = excluded.wins,
-      last_reconciled_at = excluded.last_reconciled_at
-  `).run({ vb, regime, strategy, ...d })
+      last_reconciled_at = excluded.last_reconciled_at,
+      source             = excluded.source,
+      live_win_rate      = excluded.live_win_rate,
+      live_mean_pnl      = excluded.live_mean_pnl,
+      live_sample_count  = excluded.live_sample_count,
+      sim_win_rate       = excluded.sim_win_rate,
+      sim_sample_count   = excluded.sim_sample_count,
+      reality_gap        = excluded.reality_gap
+  `).run({ vb, regime, strategy,
+    source: null, live_win_rate: null, live_mean_pnl: null, live_sample_count: 0,
+    sim_win_rate: null, sim_sample_count: 0, reality_gap: null, ...d })
 }
 
 /**

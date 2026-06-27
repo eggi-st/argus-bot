@@ -13,11 +13,12 @@ const { parseBucket } = require('./pattern-updater')
 function reconcilePatterns() {
   reloadConfig()  // observe latest learning.* (config write-path wired in Phase 4A)
   const cfg = getConfig()
-  const threshold = cfg.learning?.promotionThreshold ?? 60
+  const threshold      = cfg.learning?.promotionThreshold ?? 60
+  const minRealSamples = cfg.learning?.minRealSamples ?? 20
   const now = new Date().toISOString()
 
-  // Authoritative source: actual tracked dry-run outcomes, keyed by the decision's bucket.
-  const rows = db.prepare(`
+  // SIM rollup — dry-run outcomes, keyed by the decision's bucket (the legacy source).
+  const simRows = db.prepare(`
     SELECT d.condition_bucket AS bucket, dr.strategy AS strategy,
            COUNT(*) AS n,
            SUM(CASE WHEN dr.net_pnl_pct > 0 THEN 1 ELSE 0 END) AS wins,
@@ -28,39 +29,74 @@ function reconcilePatterns() {
     GROUP BY d.condition_bucket, dr.strategy
   `).all()
 
-  // Outcomes the authoritative source cannot represent (e.g. Meridian-feedback decisions with
-  // no dry-run row). v1 intentionally DROPS these from reconciled stats — logged, never silent.
-  const unlinked = db.prepare(`
-    SELECT COUNT(*) AS n FROM decisions d
-    WHERE d.outcome_known = 1 AND d.condition_bucket IS NOT NULL
-      AND NOT EXISTS (SELECT 1 FROM dry_run_positions dr WHERE dr.decision_id = d.id AND dr.outcome_valid = 1)
-  `).get()
+  // REAL rollup — actual Meridian executions (feedback_outcomes). Exclude spot_lo so the
+  // pure 'spot' learner stays clean (consistent with the Spot-LO routing decision).
+  const realRows = db.prepare(`
+    SELECT condition_bucket AS bucket, strategy AS strategy,
+           COUNT(*) AS n,
+           SUM(CASE WHEN win = 1 THEN 1 ELSE 0 END) AS wins,
+           AVG(pnl_pct) AS mean_pnl
+    FROM feedback_outcomes
+    WHERE condition_bucket IS NOT NULL AND strategy IN ('spot','bid_ask','limit_order')
+    GROUP BY condition_bucket, strategy
+  `).all()
 
-  let changed = 0
+  // Merge both rollups keyed on the PARSED pattern (vol×regime×strategy) — different raw
+  // condition_bucket strings can map to the same (vol,regime), so accumulate by parsed key.
+  const merged = new Map()
+  const addRow = (r, kind) => {
+    const { volatility_bucket, regime } = parseBucket(r.bucket)
+    if (!volatility_bucket || !regime) return
+    const key = `${volatility_bucket}::${regime}::${r.strategy}`
+    let e = merged.get(key)
+    if (!e) { e = { volatility_bucket, regime, strategy: r.strategy, sim: null, real: null }; merged.set(key, e) }
+    if (!e[kind]) e[kind] = { n: 0, wins: 0, sumPnl: 0 }
+    e[kind].n += r.n; e[kind].wins += r.wins; e[kind].sumPnl += (r.mean_pnl || 0) * r.n
+  }
+  for (const r of simRows)  addRow(r, 'sim')
+  for (const r of realRows) addRow(r, 'real')
+
+  let changed = 0, realCount = 0, simCount = 0
   const apply = db.transaction(() => {
-    for (const r of rows) {
-      const { volatility_bucket, regime } = parseBucket(r.bucket)
-      const win_rate = r.n > 0 ? r.wins / r.n : 0
-      const active = r.n >= threshold ? 1 : 0
+    for (const m of merged.values()) {
+      const { volatility_bucket, regime } = m
+      const sim  = m.sim  ? { ...m.sim,  mean_pnl: m.sim.n  ? m.sim.sumPnl  / m.sim.n  : 0 } : null
+      const real = m.real ? { ...m.real, mean_pnl: m.real.n ? m.real.sumPnl / m.real.n : 0 } : null
+      const simWr  = sim  && sim.n  > 0 ? sim.wins  / sim.n  : null
+      const realWr = real && real.n > 0 ? real.wins / real.n : null
+      // Real-preferred: use REAL when it has enough samples, else SIM (flagged unverified).
+      const useReal = real && real.n >= minRealSamples
+      const source  = useReal ? 'real' : 'sim'
+      const chosen  = useReal ? real : (sim || { n: 0, wins: 0, mean_pnl: 0 })
+      const win_rate = chosen.n > 0 ? chosen.wins / chosen.n : 0
+      // Only REAL-backed patterns are promoted to 'active' (drives confidence). Sim-only
+      // patterns stay inactive → adjustScore treats them as neutral (no confidence boost).
+      const active = (useReal && real.n >= Math.min(threshold, minRealSamples)) ? 1 : 0
+      if (useReal) realCount++; else simCount++
+      const reality_gap = (realWr != null && simWr != null) ? (realWr - simWr) : null
+
       const before = db.prepare(
-        `SELECT win_rate, sample_count, active FROM pattern_library WHERE volatility_bucket=? AND regime=? AND strategy=?`
-      ).get(volatility_bucket, regime, r.strategy)
-      recordPatternReconciled(volatility_bucket, regime, r.strategy, {
-        updated_at: now, win_rate, mean_pnl_net: r.mean_pnl ?? 0,
-        sample_count: r.n, wins: r.wins, active, last_reconciled_at: now,
+        `SELECT win_rate, sample_count, active, source FROM pattern_library WHERE volatility_bucket=? AND regime=? AND strategy=?`
+      ).get(volatility_bucket, regime, m.strategy)
+      recordPatternReconciled(volatility_bucket, regime, m.strategy, {
+        updated_at: now, win_rate, mean_pnl_net: chosen.mean_pnl ?? 0,
+        sample_count: chosen.n, wins: chosen.wins, active, last_reconciled_at: now,
+        source,
+        live_win_rate: realWr, live_mean_pnl: real?.mean_pnl ?? null, live_sample_count: real?.n ?? 0,
+        sim_win_rate: simWr, sim_sample_count: sim?.n ?? 0, reality_gap,
       })
-      const moved = !before || before.sample_count !== r.n ||
-        Math.abs((before.win_rate || 0) - win_rate) > 1e-9 || before.active !== active
+      const moved = !before || before.sample_count !== chosen.n ||
+        Math.abs((before.win_rate || 0) - win_rate) > 1e-9 || before.active !== active || before.source !== source
       if (moved) {
         changed++
-        console.log(`[Reconcile] ${volatility_bucket}×${regime}×${r.strategy}: N ${before?.sample_count ?? 0}→${r.n} ` +
-          `WR ${((before?.win_rate || 0) * 100).toFixed(0)}→${(win_rate * 100).toFixed(0)}% active ${before?.active ?? 0}→${active}`)
+        console.log(`[Reconcile] ${volatility_bucket}×${regime}×${m.strategy} [${source}]: N=${chosen.n} ` +
+          `WR ${(win_rate * 100).toFixed(0)}% active=${active}` + (reality_gap != null ? ` gap ${(reality_gap*100).toFixed(0)}pp` : ''))
       }
     }
   })
   apply()
-  console.log(`[Reconcile] ${rows.length} pattern(s) recomputed, ${changed} changed; ${unlinked?.n ?? 0} unlinked outcome(s) not in source`)
-  return { patterns: rows.length, changed, unlinked: unlinked?.n ?? 0 }
+  console.log(`[Reconcile] ${merged.size} pattern(s); ${realCount} real-backed, ${simCount} sim-fallback; ${changed} changed`)
+  return { patterns: merged.size, realCount, simCount, changed }
 }
 
 function init() {
