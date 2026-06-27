@@ -1069,12 +1069,14 @@ function loadWalletActions() {
       html += `<div class="empty" style="font-size:12px;line-height:1.5">${smCount} whale dilacak — belum ada aksi LP <b>baru</b> sejak dilacak (whale cenderung <i>hold</i> posisi berhari-hari).<br><span style="color:var(--muted2)">Pool yang mereka pegang + "Last Active" tiap whale ada di halaman <b>Hivemind</b>.</span></div>`
     }
 
-    // 👤 Own (Meridian) — frequent but the rich version (P&L/strategy/technique) lives in Outcomes
-    html += sect('👤 OWN (MERIDIAN)', 'P&L / strategi / teknik lengkap di halaman Meridian Outcomes')
+    // 👤 Own (Meridian) — enriched with token + P&L from feedback_outcomes (join by pool)
+    const pnlOf = a => a.outcome_pnl_pct == null ? '<span style="color:var(--muted)">—</span>'
+      : `<span style="font-weight:600;color:${a.outcome_pnl_pct >= 0 ? 'var(--green)' : 'var(--red)'}">${a.outcome_pnl_pct >= 0 ? '+' : ''}${a.outcome_pnl_pct}%</span>`
+    html += sect('👤 OWN (MERIDIAN)', 'P&L per pool dari outcome nyata · detail lengkap di Meridian Outcomes')
     if (ownActs.length) {
-      const C = '50px 120px 95px 95px 1fr'
-      html += `<div class="tbl-wrap"><div class="tbl-head" style="grid-template-columns:${C}"><span>Time</span><span>Action</span><span>Token</span><span>Amount</span><span>Pool</span></div>` +
-        ownActs.slice(0,20).map(a => `<div class="tbl-row" style="grid-template-columns:${C}"><span style="color:var(--muted)">${ts(a)}</span><span style="font-size:12px">${(a.action_type||'').replace(/_/g,' ')}</span><span>${tokOf(a)}</span><span style="font-size:11px">${amt(a)}</span><span style="color:var(--muted);font-size:10px">${a.pool_address ? a.pool_address.slice(0,8)+'…' : '—'}</span></div>`).join('') + `</div>`
+      const C = '50px 110px 88px 88px 70px 1fr'
+      html += `<div class="tbl-wrap"><div class="tbl-head" style="grid-template-columns:${C}"><span>Time</span><span>Action</span><span>Token</span><span>Amount</span><span>P&L</span><span>Pool</span></div>` +
+        ownActs.slice(0,20).map(a => `<div class="tbl-row" style="grid-template-columns:${C}"><span style="color:var(--muted)">${ts(a)}</span><span style="font-size:12px">${(a.action_type||'').replace(/_/g,' ')}</span><span>${tokOf(a)}</span><span style="font-size:11px">${amt(a)}</span><span style="font-size:11px">${pnlOf(a)}</span><span style="color:var(--muted);font-size:10px">${a.pool_address ? a.pool_address.slice(0,8)+'…' : '—'}</span></div>`).join('') + `</div>`
     } else {
       html += `<div class="empty">Belum ada aksi own.</div>`
     }

@@ -609,7 +609,30 @@ app.get('/api/wallet-actions', (req, res) => {
       FROM wallet_actions
       ORDER BY detected_at DESC LIMIT ?
     `).all(limit)
-    res.json({ actions, status: wallet.observer.getStatus() })
+    // Enrich from the rich Meridian outcomes (feedback_outcomes) by pool — own actions
+    // ARE Meridian's trades, so fill the missing token + surface the real P&L per pool.
+    const pools = [...new Set(actions.map(a => a.pool_address).filter(Boolean))]
+    const foByPool = {}
+    if (pools.length) {
+      const ph = pools.map(() => '?').join(',')
+      for (const f of db.prepare(`
+        SELECT pool_address, token_symbol, pnl_pct, win
+        FROM feedback_outcomes WHERE pool_address IN (${ph})
+        ORDER BY created_at DESC
+      `).all(...pools)) {
+        if (!foByPool[f.pool_address]) foByPool[f.pool_address] = f  // latest per pool
+      }
+    }
+    const enriched = actions.map(a => {
+      const fo = foByPool[a.pool_address]
+      return {
+        ...a,
+        token_symbol:    a.token_symbol || fo?.token_symbol || null,
+        outcome_pnl_pct: fo?.pnl_pct ?? null,
+        outcome_win:     fo?.win ?? null,
+      }
+    })
+    res.json({ actions: enriched, status: wallet.observer.getStatus() })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
