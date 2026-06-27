@@ -3,6 +3,11 @@ const fetch = require('node-fetch')
 
 const BASE_URL = 'https://api.telegram.org/bot'
 
+// Redact the bot token from any string before logging. node-fetch/undici error
+// messages embed the full request URL ("...at: https://api.telegram.org/bot<TOKEN>/...")
+// which would leak the secret into logs. Strip it everywhere we log an error.
+const redactTok = (s) => String(s == null ? '' : s).replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot<redacted>')
+
 // Priority levels — determines channel and retry behavior
 // P1: Critical (dump, circuit breaker) → always send + retry 5x
 // P2: Important (new recommendation, fill) → send + retry 3x
@@ -31,7 +36,7 @@ class TelegramNotifier {
       this.enabled = true
       console.log(`✓  Telegram connected as @${res.result.username}`)
     } catch (err) {
-      console.warn('[Telegram] Could not connect:', err.message, '— running without Telegram')
+      console.warn('[Telegram] Could not connect:', redactTok(err.message), '— running without Telegram')
     }
   }
 
@@ -68,10 +73,10 @@ class TelegramNotifier {
       })
       return res.result.message_id
     } catch (err) {
-      console.warn(`[Telegram] Send failed (${priority}):`, err.message)
+      console.warn(`[Telegram] Send failed (${priority}):`, redactTok(err.message))
       if (maxRetries > 0) {
         this._retryQueue.push({ text: message, attemptsLeft: maxRetries })
-        this._drainRetryQueue().catch(e => console.warn('[Telegram] Retry drain error:', e.message))
+        this._drainRetryQueue().catch(e => console.warn('[Telegram] Retry drain error:', redactTok(e.message)))
       }
       return null
     }
@@ -219,7 +224,7 @@ class TelegramNotifier {
         await this._handleCommand(text.split(' ')[0].toLowerCase(), chatId)
       }
     } catch (e) {
-      console.warn('[Telegram] Poll error:', e.message)
+      console.warn('[Telegram] Poll error:', redactTok(e.message))
     }
     setTimeout(() => this._poll(), 1000)
   }
