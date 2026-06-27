@@ -88,4 +88,53 @@ async function getPriceForPosition(tokenMint, poolAddress) {
   return null
 }
 
-module.exports = { getPoolPrice, getPoolSnapshot, getDexscreenerPrice, getPriceForPosition }
+// ── Pool → token identity resolver (for the Wallet Observer) ──────────────────
+// Resolves an account to its base token via the same pool-discovery endpoint.
+// Cached so the observer never re-queries the same account: a positive cache of
+// resolved pools and a negative set of accounts confirmed NOT to be pools.
+const _poolTokenCache = new Map()   // poolAddress → { pool_address, token_mint, token_symbol }
+const _notAPool       = new Set()   // accounts confirmed to not be a Meteora pool
+
+/**
+ * Given a candidate account, return { pool_address, token_mint, token_symbol }
+ * if it is a Meteora pool, else null. Results are cached (both hits and misses).
+ */
+async function getPoolToken(account) {
+  if (!account) return null
+  if (_poolTokenCache.has(account)) return _poolTokenCache.get(account)
+  if (_notAPool.has(account)) return null
+
+  const url = `${POOL_DISCOVERY_BASE}/pools?page_size=1` +
+    `&filter_by=${encodeURIComponent(`pool_address=${account}`)}&timeframe=30m`
+  try {
+    const res = await fetch(url, { timeout: FETCH_TIMEOUT_MS })
+    if (!res.ok) { _notAPool.add(account); return null }
+    const data = await res.json()
+    const p = (data.data || [])[0]
+    const base = p?.token_x || {}
+    if (!p || !base.address) { _notAPool.add(account); return null }
+    const info = {
+      pool_address: account,
+      token_mint:   base.address,
+      token_symbol: base.symbol || null,
+    }
+    _poolTokenCache.set(account, info)
+    return info
+  } catch {
+    return null   // transient error — don't poison the negative cache
+  }
+}
+
+/**
+ * Resolve the first account in a list that is a Meteora pool. Bounded to the
+ * first `max` accounts (the lbPair appears early in Meteora instructions).
+ */
+async function resolvePoolFromAccounts(accounts, max = 5) {
+  for (const acc of (accounts || []).slice(0, max)) {
+    const info = await getPoolToken(acc)
+    if (info) return info
+  }
+  return null
+}
+
+module.exports = { getPoolPrice, getPoolSnapshot, getDexscreenerPrice, getPriceForPosition, getPoolToken, resolvePoolFromAccounts }

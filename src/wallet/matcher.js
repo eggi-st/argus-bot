@@ -1,5 +1,6 @@
 'use strict'
 const db = require('../db/database')
+const { resolvePoolFromAccounts } = require('../dry-run/price-feed')
 
 /**
  * Given a parsed wallet action, check if it corresponds to an Argus decision.
@@ -69,8 +70,22 @@ function matchToDecision(action) {
  * For smart_money wallets: records as learning signal only (no markFollowed).
  * Returns the record that was (attempted to be) inserted.
  */
-function processAction(action, wallet, { recordWalletAction, markFollowed }) {
+async function processAction(action, wallet, { recordWalletAction, markFollowed }) {
   const match = matchToDecision(action)
+
+  // For unmatched (user_only) actions the token is unknown — the pool was only a
+  // positional guess. Resolve it from-chain via the pool-discovery API so the UI
+  // shows which token the wallet acted on instead of "—".
+  if (match.matchCategory === 'user_only' && !match.tokenSymbol) {
+    try {
+      const resolved = await resolvePoolFromAccounts(action.involvedAccounts)
+      if (resolved) {
+        match.poolAddress = resolved.pool_address
+        match.tokenMint   = resolved.token_mint
+        match.tokenSymbol = resolved.token_symbol
+      }
+    } catch { /* keep the positional fallback */ }
+  }
 
   const record = {
     detected_at:         action.blockTime || new Date().toISOString(),

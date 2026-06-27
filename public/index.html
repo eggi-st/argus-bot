@@ -1000,12 +1000,14 @@ function loadHivemind() {
   apiFetch('/api/hivemind/wallets').then(r => r.json()).then(d => {
     const htEl = document.getElementById('hv-table')
     if (!d.wallets?.length) return
-    const COLS = '130px 110px 70px 70px 1fr'
-    const header = `<div class="tbl-head" style="grid-template-columns:${COLS}"><span>Address</span><span>Label</span><span>Source</span><span>Pools</span><span>Discovered</span></div>`
+    const COLS = '120px 100px 65px 60px 95px 1fr'
+    const header = `<div class="tbl-head" style="grid-template-columns:${COLS}"><span>Address</span><span>Label</span><span>Source</span><span title="Jumlah pool tempat wallet ini terlihat LP">Pools</span><span title="Terakhir wallet ini terlihat aktif on-chain">Last Active</span><span>Discovered</span></div>`
+    const fmtAgo = (s) => { if (!s) return '—'; const d = (Date.now() - new Date(s).getTime())/3600000; if (d < 1) return Math.max(1,Math.round(d*60))+'m'; if (d < 24) return Math.round(d)+'j'; return Math.round(d/24)+'h' }
     const rows = d.wallets.map(w => {
       const ts = w.discovered_at ? new Date(w.discovered_at).toLocaleDateString('id-ID') : '—'
-      const active = w.active ? `<span class="badge badge-green">active</span>` : `<span class="badge badge-gray">inactive</span>`
-      return `<div class="tbl-row" style="grid-template-columns:${COLS}"><span style="font-size:11px">${w.address.slice(0,10)}…</span><span>${w.label||'—'}</span><span class="badge badge-gray">${w.source}</span><span style="color:var(--blue)">${w.pool_hits}</span><span style="color:var(--muted);font-size:11px">${ts}</span></div>`
+      const seen = fmtAgo(w.last_seen)
+      const stale = w.last_seen && (Date.now() - new Date(w.last_seen).getTime()) > 7*24*3600000
+      return `<div class="tbl-row" style="grid-template-columns:${COLS}"><span style="font-size:11px">${w.address.slice(0,10)}…</span><span>${w.label||'—'}</span><span class="badge badge-gray">${w.source}</span><span style="color:var(--blue)">${w.pool_hits}</span><span style="color:${stale?'var(--muted)':'var(--green)'};font-size:11px" title="${w.last_seen||''}">${seen}${stale?' ⚠':''}</span><span style="color:var(--muted);font-size:11px">${ts}</span></div>`
     }).join('')
     htEl.innerHTML = `<div class="tbl-wrap">${header + rows}</div>`
   }).catch(() => {})

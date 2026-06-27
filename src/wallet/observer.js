@@ -48,7 +48,7 @@ async function pollWallet(wallet, rpcUrl) {
       const action = parseMeteoraTx(txResult, sig.signature)
       if (!action) continue
 
-      const record = processAction(action, wallet, { recordWalletAction, markFollowed })
+      const record = await processAction(action, wallet, { recordWalletAction, markFollowed })
       found++
 
       bus.emitSafe('wallet_action_detected', {
