@@ -716,12 +716,11 @@ function loadDecisions() {
       const condLabel = (dec.condition_bucket || '').replace(/_/g,' ')
       const conf = dec.confidence != null ? `${Math.min(100,Math.round(dec.confidence*100))}% conf` : ''
       const exp = new Date(dec.expires_at).toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'})
-      const dexUrl = dec.token_mint ? `https://dexscreener.com/solana/${dec.token_mint}` : null
       return `<div class="dec-row">
         <div class="dec-dot ${STRAT_DOT[dec.strategy]||'dec-dot-spot'}" style="margin-top:7px"></div>
         <div class="dec-main">
           <div class="dec-top">
-            ${dexUrl ? `<a href="${dexUrl}" target="_blank" class="dec-pair" style="text-decoration:none;color:#d1d5db">${dec.token_symbol||'?'}</a>` : `<span class="dec-pair">${dec.token_symbol||'?'}</span>`}
+            <span class="dec-pair" style="color:#d1d5db">${dec.token_symbol||'?'}</span>
             <span class="badge ${STRAT_BADGE[dec.strategy]||'badge-gray'}">${STRAT_LABEL[dec.strategy]||dec.strategy}</span>
             ${conf ? `<span class="badge badge-gray">${conf}</span>` : ''}
             ${dec.primary_technique ? `<span class="badge ${AUTHOR_BADGE[dec.technique_author]||'badge-gray'}" title="${dec.technique_author||''}" style="font-size:8px">${dec.primary_technique}</span>` : ''}
@@ -793,10 +792,7 @@ function loadDryRun() {
     } else {
       openEl.innerHTML = open.map(p => {
         const elapsed = p.opened_at ? Math.floor((Date.now() - new Date(p.opened_at)) / 60000) : null
-        const dexUrl = p.token_mint ? `https://dexscreener.com/solana/${p.token_mint}` : null
-        const tokLink = dexUrl
-          ? `<a href="${dexUrl}" target="_blank" class="pos-pair" style="text-decoration:none">${p.token_symbol || p.token_mint?.slice(0,8) || '?'}</a>`
-          : `<span class="pos-pair">${p.token_symbol || '?'}</span>`
+        const tokLink = `<span class="pos-pair">${p.token_symbol || p.token_mint?.slice(0,8) || '?'}</span>`
         return `<div class="pos-card open">
           <div class="pos-card-header">
             ${tokLink}
@@ -830,10 +826,7 @@ function loadDryRun() {
       const COLS = '95px 78px 68px 70px 56px 46px 98px 64px'
       const header = `<div class="tbl-head" style="grid-template-columns:${COLS}"><span>Token</span><span>Strategy</span><span title="Harga + fee − slippage (hasil akhir)">Net P&L</span><span title="P&L dari pergerakan harga saja / impermanent loss — belum termasuk fee">Harga/IL</span><span title="Pendapatan fee LP (capped ~10%)">Fees</span><span>Hold</span><span>Opened</span><span>Exit</span></div>`
       const rows = closed.slice(0, 30).map(p => {
-        const dexUrl = p.token_mint ? `https://dexscreener.com/solana/${p.token_mint}` : null
-        const tok = dexUrl
-          ? `<a href="${dexUrl}" target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">${p.token_symbol||p.token_mint?.slice(0,8)||'?'}</a>`
-          : `<b>${p.token_symbol||'?'}</b>`
+        const tok = `<b>${p.token_symbol||p.token_mint?.slice(0,8)||'?'}</b>`
         // No-fill: single-sided bid never entered range → no IL, no fees, net 0
         const noFill = p.net_pnl_pct === 0 && p.gross_pnl_pct === 0
         const pnl = p.net_pnl_pct
@@ -1055,7 +1048,7 @@ function loadWalletActions() {
     const header = `<div class="tbl-head" style="grid-template-columns:${COLS}"><span>Time</span><span>Action</span><span>Token</span><span>Wallet</span><span>Match</span><span>Strategy</span></div>`
     const rows = d.actions.slice(0, 25).map(a => {
       const ts = new Date(a.detected_at).toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'})
-      const tok = a.token_mint ? `<a href="https://dexscreener.com/solana/${a.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none">${a.token_symbol||a.token_mint.slice(0,8)}</a>` : (a.token_symbol||'—')
+      const tok = a.token_symbol || a.token_mint?.slice(0,8) || '—'
       const wPill = a.wallet_type === 'smart_money' ? `<span class="badge badge-yellow">${a.wallet_label||'whale'}</span>` : `<span class="badge badge-blue">${a.wallet_label||'own'}</span>`
       const mPill = a.match_category === 'followed' ? `<span class="badge badge-green">followed</span>` : `<span class="badge badge-gray">own</span>`
       return `<div class="tbl-row" style="grid-template-columns:${COLS}"><span style="color:var(--muted)">${ts}</span><span style="font-size:12px">${(a.action_type||'').replace(/_/g,' ')}</span><span>${tok}</span><span>${wPill}</span><span>${mPill}</span><span style="color:var(--muted);font-size:11px">${a.strategy||'—'}</span></div>`
@@ -1103,10 +1096,7 @@ function loadFeedbackHistory() {
     </div>`
     const rows = outcomes.map(o => {
       const ts = new Date(o.created_at).toLocaleString('id-ID', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})
-      const dexUrl = o.token_mint ? `https://dexscreener.com/solana/${o.token_mint}` : null
-      const tok = dexUrl
-        ? `<a href="${dexUrl}" target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">${o.token_symbol||'?'}</a>`
-        : `<b>${o.token_symbol||'?'}</b>`
+      const tok = `<b>${o.token_symbol||'?'}</b>`
       const pnl = o.outcome_pnl_pct
       const pnlEl = pnl != null
         ? `<span style="font-weight:700;color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%</span>`
@@ -1119,7 +1109,7 @@ function loadFeedbackHistory() {
         : '<span style="color:var(--muted)">—</span>'
       const bucket = (o.condition_bucket || '').replace(/_/g, ' ') || '—'
       const pool = o.pool_address
-        ? `<a href="https://app.meteora.ag/dlmm/${o.pool_address}" target="_blank" style="color:var(--muted);font-size:10px;text-decoration:none">${o.pool_address.slice(0,10)}…</a>`
+        ? `<span style="color:var(--muted);font-size:10px">${o.pool_address.slice(0,10)}…</span>`
         : '—'
       return `<div class="tbl-row" style="grid-template-columns:${COLS}">
         <span style="color:var(--muted);font-size:11px">${ts}</span>
@@ -1209,7 +1199,7 @@ function loadRejections() {
     const header = `<div class="tbl-head" style="grid-template-columns:${COLS}"><span>Time</span><span>Token</span><span>Stage</span><span>Reason</span><span>Metrics</span></div>`
     const rows = d.rejections.slice(0, 30).map(r => {
       const ts = new Date(r.scanned_at).toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'})
-      const tok = r.token_mint ? `<a href="https://dexscreener.com/solana/${r.token_mint}" target="_blank" style="color:var(--blue);text-decoration:none">${r.token_symbol||r.token_mint.slice(0,8)}</a>` : (r.token_symbol||'—')
+      const tok = r.token_symbol || r.token_mint?.slice(0,8) || '—'
       const stagePill = r.reject_stage === 'screener' ? `<span class="badge badge-gray">filter</span>` : `<span class="badge badge-yellow">enrich</span>`
       let metrics = ''
       try { const m = JSON.parse(r.key_metrics||'{}'); metrics = [m.vol != null ? `v${parseFloat(m.vol).toFixed(1)}` : '', m.fee_tvl != null ? `f${parseFloat(m.fee_tvl).toFixed(2)}` : '', m.organic != null ? `o${m.organic}` : ''].filter(Boolean).join(' ') } catch {}

@@ -125,7 +125,8 @@ class TelegramNotifier {
     return this.send(
       `🎯 <b>${token}</b> · ${stratLabel} · ${confidence}% conf · valid ${ttlMinutes}m` +
       entryLine + verdictLine + '\n' +
-      (poolUrl ? `<a href="${poolUrl}">Buka pool</a> · ` : '') +
+      // No external pool/token link — opsec: a click would leak the viewer's IP to the
+      // destination's analytics. Only the self-hosted dashboard link remains.
       `<a href="${serverUrl}">Dashboard</a>`,
       'P2'
     )
