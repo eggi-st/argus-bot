@@ -35,6 +35,16 @@ const DEFAULTS = {
     timeframe: '30m',
     category: 'all',
     excludeHighSupplyConcentration: true,
+    // Anti-rug screen (attributed technique 'antirug_evilpanda', kind:'screen'). A universal
+    // gate applied to ALL strategies. Thresholds learned from a 428-position forensic:
+    // catastrophes (≤−5%) clustered at young age (~25h) + high TVL/mcap (~0.15) vs winners
+    // (~175h, ~0.05). Rule lives in techniques.js SCREENS so live gating + counterfactual edge
+    // share one source. Disable by setting enabled:false.
+    antirug: {
+      enabled: true,
+      minTokenAgeHours: 48,    // forensic: winners p25=54h, catastrophes median 25h
+      maxTvlMcapRatio: 0.10,   // forensic: catastrophes 0.15 vs winners 0.05 (exit-liquidity trap)
+    },
     // Per-strategy screening profiles. The base values above are the DEFAULT / bid_ask
     // profile (fresh high-vol memes). Each profile shallow-overrides the base so a dedicated
     // pipeline can target a different universe and let that strategy accumulate samples.

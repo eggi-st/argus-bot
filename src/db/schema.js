@@ -317,12 +317,14 @@ function migrateSchema() {
         attribution   TEXT,
         source_ref    TEXT,
         side          TEXT CHECK(side IN ('entry','exit','both')),
+        kind          TEXT DEFAULT 'timing',  -- 'timing' (entry/exit signals) | 'screen' (universe gates)
         applies_to    TEXT,
         maturity      TEXT DEFAULT 'proposed',
         version       INTEGER DEFAULT 1,
         created_at    TEXT NOT NULL
       );
     `)
+    try { db.exec(`ALTER TABLE techniques ADD COLUMN kind TEXT DEFAULT 'timing'`) } catch {}
     seedTechniques()
   } catch (e) {
     if (!e.message?.includes('already exists')) console.warn('[Schema] techniques:', e.message)
@@ -369,19 +371,20 @@ function seedTechniques() {
   const { CATALOGUE } = require('../intelligence/techniques')
   const now = new Date().toISOString()
   const stmt = db.prepare(`
-    INSERT INTO techniques (id, label, author, author_type, attribution, source_ref, side, applies_to, maturity, version, created_at)
-    VALUES (@id, @label, @author, @author_type, @attribution, @source_ref, @side, @applies_to, @maturity, @version, @created_at)
+    INSERT INTO techniques (id, label, author, author_type, attribution, source_ref, side, kind, applies_to, maturity, version, created_at)
+    VALUES (@id, @label, @author, @author_type, @attribution, @source_ref, @side, @kind, @applies_to, @maturity, @version, @created_at)
     ON CONFLICT(id) DO UPDATE SET
       label=excluded.label, author=excluded.author, author_type=excluded.author_type,
       attribution=excluded.attribution, source_ref=excluded.source_ref, side=excluded.side,
-      applies_to=excluded.applies_to, maturity=excluded.maturity, version=excluded.version
+      kind=excluded.kind, applies_to=excluded.applies_to, maturity=excluded.maturity, version=excluded.version
   `)
   const tx = db.transaction(rows => {
     for (const t of rows) {
       stmt.run({
         id: t.id, label: t.label, author: t.author, author_type: t.author_type,
         attribution: t.attribution ?? null, source_ref: t.source_ref ?? null,
-        side: t.side ?? null, applies_to: JSON.stringify(t.applies_to ?? []),
+        side: t.side ?? null, kind: t.kind === 'screen' ? 'screen' : 'timing',
+        applies_to: JSON.stringify(t.applies_to ?? []),
         maturity: t.maturity ?? 'proposed', version: t.version ?? 1, created_at: now,
       })
     }

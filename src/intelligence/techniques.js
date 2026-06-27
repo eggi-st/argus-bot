@@ -158,7 +158,40 @@ const CATALOGUE = [
     source_ref: 'proposal',
     side: 'both', maturity: 'not_built', applies_to: ['limit_order'],
   },
+
+  // ── SCREENING techniques (kind:'screen') — universe gates, NOT timing signals.
+  // Measured by counterfactual edge (would-reject vs kept on history), not an outcome rollup,
+  // so they never pollute the timing-technique attribution. See docs/TECHNIQUE-MAP-AND-PROVENANCE.md.
+  {
+    id: 'antirug_evilpanda', label: 'Anti-rug screen (age + TVL/mcap)',
+    author: 'evilpanda', author_type: 'community',
+    attribution: 'EvilPanda anti-rug methodology (age/tvl-mcap/fees/top10/bundle); thresholds learned by Argus from a 428-position forensic — catastrophes were young (~25h) + high tvl/mcap (~0.15)',
+    source_ref: 'https://www.youtube.com/watch?v=pD9MR3MONKM',
+    kind: 'screen', side: 'entry', maturity: 'dry_run', applies_to: ['bid_ask', 'spot', 'limit_order'],
+  },
 ]
+
+/**
+ * Screening evaluators — pure pass/reject tests over a position's feature set, keyed by the
+ * screen technique id. test(features) → true (PASS/keep) | false (REJECT) | null (can't evaluate).
+ * Used BOTH to gate live candidates and to compute counterfactual edge on historical outcomes.
+ * Thresholds live in config (cfg.screening.antirug); defaults here match the forensic.
+ */
+const SCREENS = {
+  antirug_evilpanda: {
+    defaults: { minTokenAgeHours: 48, maxTvlMcapRatio: 0.10 },
+    test(f, cfg = {}) {
+      const minAge = cfg.minTokenAgeHours ?? 48
+      const maxRatio = cfg.maxTvlMcapRatio ?? 0.10
+      const age = f?.token_age_hours ?? null
+      const ratio = f?.tvl_mcap_ratio ?? ((f?.entry_tvl > 0 && f?.entry_mcap > 0) ? f.entry_tvl / f.entry_mcap : null)
+      if (age == null && ratio == null) return null   // no data to judge
+      if (age != null && age < minAge) return false
+      if (ratio != null && ratio > maxRatio) return false
+      return true
+    },
+  },
+}
 
 const BY_ID = new Map(CATALOGUE.map(t => [t.id, t]))
 
@@ -181,4 +214,7 @@ function techniquesForStrategy(strategy, side = null) {
   )
 }
 
-module.exports = { CATALOGUE, getTechnique, techniqueAuthor, techniquesForStrategy }
+/** kind for a technique: 'screen' if declared, else 'timing' (default for all entry/exit signals). */
+function techniqueKind(t) { return t?.kind === 'screen' ? 'screen' : 'timing' }
+
+module.exports = { CATALOGUE, SCREENS, getTechnique, techniqueAuthor, techniquesForStrategy, techniqueKind }

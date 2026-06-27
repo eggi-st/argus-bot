@@ -3,6 +3,7 @@ const fetch = require('node-fetch')
 const db = require('../db/database')
 const { getConfig } = require('../config')
 const { recordRejection, recordTokenPrice, getTokenAth } = require('../db/schema')
+const { SCREENS } = require('./techniques')
 
 const POOL_DISCOVERY_BASE = 'https://pool-discovery-api.datapi.meteora.ag'
 const OKX_BASE = 'https://web3.okx.com'
@@ -283,6 +284,19 @@ function getRejectReason(pool, s) {
   if (s.maxTokenAgeHours != null) {
     const minCreated = Date.now() - s.maxTokenAgeHours * 3_600_000
     if (createdAt == null || createdAt < minCreated) return `token age > ${s.maxTokenAgeHours}h`
+  }
+
+  // Anti-rug screen (technique 'antirug_evilpanda', kind:'screen') — universal gate via the
+  // shared SCREENS evaluator so live gating + counterfactual edge use one rule.
+  if (s.antirug?.enabled) {
+    const ageH = createdAt != null ? (Date.now() - createdAt) / 3_600_000 : null
+    const verdict = SCREENS.antirug_evilpanda.test(
+      { token_age_hours: ageH, entry_tvl: tvl, entry_mcap: mcap }, s.antirug
+    )
+    if (verdict === false) {
+      const ratio = (tvl > 0 && mcap > 0) ? (tvl / mcap).toFixed(3) : '?'
+      return `antirug_evilpanda: age=${ageH != null ? ageH.toFixed(0) + 'h' : '?'} tvl/mcap=${ratio}`
+    }
   }
   return null
 }

@@ -70,7 +70,8 @@ app.use(express.static(path.join(__dirname, '../public')))
 const { version } = require('../package.json')
 const db = require('./db/database')
 const { recordFeedbackOutcome } = require('./db/schema')
-const { techniqueAuthor } = require('./intelligence/techniques')
+const { techniqueAuthor, SCREENS } = require('./intelligence/techniques')
+const { getConfig } = require('./config')
 
 // Map a Meridian close_reason to an Argus exit technique id (for live attribution).
 function mapExitTechnique(closeReason) {
@@ -370,7 +371,7 @@ app.get('/api/pattern-library', (req, res) => {
 // attribution dashboard — NOT for gating (the primary learner stays vol×regime×strategy).
 app.get('/api/techniques/performance', (req, res) => {
   try {
-    const reg = db.prepare(`SELECT id, label, author, author_type, side, applies_to, maturity FROM techniques`).all()
+    const reg = db.prepare(`SELECT id, label, author, author_type, side, kind, applies_to, maturity FROM techniques`).all()
     const agg = (col) => db.prepare(`
       SELECT ${col} AS tech, strategy,
              COUNT(*) AS n,
@@ -413,9 +414,10 @@ app.get('/api/techniques/performance', (req, res) => {
     `).all()
     const liveByTech = roll(liveRows)
 
-    // Per-technique registry view (includes zero-sample techniques so the full catalogue shows).
+    // TIMING techniques only (kind!='screen') — entry/exit outcome rollup. Screens are handled
+    // separately (counterfactual) so they never pollute the timing attribution.
     // reality_gap = live win-rate − dry-run win-rate: how wrong the simulation is for this technique.
-    const techniques = reg.map(t => {
+    const techniques = reg.filter(t => t.kind !== 'screen').map(t => {
       let applies_to = []
       try { applies_to = t.applies_to ? JSON.parse(t.applies_to) : [] } catch {}
       const entry = entryByTech[t.id] || null
@@ -426,6 +428,32 @@ app.get('/api/techniques/performance', (req, res) => {
         id: t.id, label: t.label, author: t.author, author_type: t.author_type,
         side: t.side, maturity: t.maturity, applies_to,
         entry, live, exit: exitByTech[t.id] || null, reality_gap,
+      }
+    })
+
+    // SCREENING techniques (kind='screen') — counterfactual edge over live outcomes with features.
+    // A screen can't be measured by outcomes-of-passed (rejected ones have no outcome), so replay
+    // its rule on history: kept vs rejected win-rate/mean + catastrophes (≤−5%) it would remove.
+    const fbFeat = db.prepare(`SELECT pnl_pct, features_json FROM feedback_outcomes WHERE features_json IS NOT NULL`).all()
+      .map(r => { try { return { pnl: r.pnl_pct, f: JSON.parse(r.features_json) } } catch { return null } }).filter(Boolean)
+    const antirugCfg = getConfig().screening?.antirug || {}
+    const wr = a => a.length ? Math.round(a.filter(x => x.pnl > 0).length / a.length * 100) / 100 : null
+    const mn = a => a.length ? Math.round(a.reduce((s, x) => s + x.pnl, 0) / a.length * 1000) / 1000 : null
+    const baseMean = mn(fbFeat)
+    const screens = reg.filter(t => t.kind === 'screen').map(t => {
+      let applies_to = []; try { applies_to = t.applies_to ? JSON.parse(t.applies_to) : [] } catch {}
+      const ev = SCREENS[t.id]?.test
+      const base = { id: t.id, label: t.label, author: t.author, author_type: t.author_type,
+        maturity: t.maturity, applies_to, kind: 'screen' }
+      if (!ev) return { ...base, evaluator: false }
+      const kept = [], rej = [], unknown = []
+      for (const x of fbFeat) { const v = ev(x.f, antirugCfg); (v === true ? kept : v === false ? rej : unknown).push(x) }
+      return {
+        ...base, evaluated: fbFeat.length, kept: kept.length, rejected: rej.length, unknown: unknown.length,
+        kept_wr: wr(kept), kept_mean: mn(kept), rejected_wr: wr(rej), rejected_mean: mn(rej),
+        catastrophes_total: fbFeat.filter(x => x.pnl <= -5).length,
+        catastrophes_rejected: rej.filter(x => x.pnl <= -5).length,
+        lift: (mn(kept) != null && baseMean != null) ? Math.round((mn(kept) - baseMean) * 1000) / 1000 : null,
       }
     })
 
@@ -468,7 +496,7 @@ app.get('/api/techniques/performance', (req, res) => {
     const shadow_ab = { primary, shadow: shadowTech, agree, disagree,
       total: agree + disagree, agreement_rate: (agree + disagree) ? Math.round(agree / (agree + disagree) * 100) / 100 : null }
 
-    res.json({ techniques, by_author, shadow_ab })
+    res.json({ techniques, screens, by_author, shadow_ab })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

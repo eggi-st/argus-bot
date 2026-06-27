@@ -419,7 +419,12 @@
         <button class="btn btn-gray" onclick="loadTechniques()" style="font-size:10px;padding:3px 9px">↻</button>
       </div>
       <div id="tech-authors" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px"></div>
+      <div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted2);margin-bottom:8px">Timing techniques</div>
       <div id="tech-list"></div>
+      <div id="tech-screens-section" style="display:none;margin-top:18px">
+        <div style="font-size:0.6rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted2);margin-bottom:8px">Screening techniques <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— counterfactual edge on history</span></div>
+        <div id="tech-screens"></div>
+      </div>
     </div>
   </div>
 
@@ -935,8 +940,35 @@ function loadTechniques() {
         </div>
       </div>`
     }).join('')
+
+    // Screening techniques — counterfactual edge (kept vs rejected on history)
+    const screens = d.screens || []
+    const sec = document.getElementById('tech-screens-section')
+    const withData = screens.filter(s => s.evaluated > 0)
+    sec.style.display = screens.length ? 'block' : 'none'
+    document.getElementById('tech-screens').innerHTML = screens.map(s => {
+      if (!s.evaluated) return `<div class="dec-row"><div class="dec-main"><div class="dec-top">
+        <span style="color:var(--fg);font-weight:600;font-size:12px">${s.label}</span>
+        <span class="badge ${AUTHOR_BADGE[s.author]||'badge-gray'}">${s.author}</span></div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:3px">belum ada outcome ber-fitur untuk dievaluasi</div></div></div>`
+      const liftColor = s.lift >= 0 ? 'var(--green)' : 'var(--red)'
+      return `<div class="dec-row"><div class="dec-main" style="min-width:0">
+        <div class="dec-top">
+          <span style="color:var(--fg);font-weight:600;font-size:12px">${s.label}</span>
+          <span class="badge ${AUTHOR_BADGE[s.author]||'badge-gray'}">${s.author}</span>
+          <span style="margin-left:auto;color:${liftColor};font-size:11px" title="kept mean − baseline mean">lift ${s.lift>0?'+':''}${s.lift}%</span>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-top:3px;display:flex;gap:12px;flex-wrap:wrap">
+          <span>tolak <b style="color:var(--red)">${s.catastrophes_rejected}/${s.catastrophes_total}</b> katastrofi</span>
+          <span>keep WR <span style="color:${wrTint(s.kept_wr)}">${s.kept_wr!=null?Math.round(s.kept_wr*100)+'%':'—'}</span>/${f2num(s.kept_mean)}%</span>
+          <span>reject ${s.rejected_wr!=null?Math.round(s.rejected_wr*100)+'%':'—'}/${f2num(s.rejected_mean)}%</span>
+          <span style="color:var(--muted2)">N=${s.kept}↑/${s.rejected}↓</span>
+        </div>
+      </div></div>`
+    }).join('')
   }).catch(() => {})
 }
+function f2num(x){ return x==null ? '—' : (x>0?'+':'')+x.toFixed(2) }
 
 // ── Hivemind ───────────────────────────────────────────────────────────────────
 function loadHivemind() {
