@@ -262,7 +262,9 @@ function processPool(pool, cfg, forceStrategy) {
       console.error(`[IC] Failed to open dry run for decision #${decisionId}:`, drErr.message)
     }
 
-    // Telegram alert — fire-and-forget
+    // Telegram alert — fire-and-forget. Include entry parameters for manual execution
+    // (single-sided SOL bid BELOW price): entry price + the downward range it covers.
+    const _rangePct = dryRun.rangePctForStrategy(forceStrategy, pool.bin_step)
     telegram.recommendation({
       token:      pool.base?.symbol || '?',
       strategy:   forceStrategy,
@@ -270,6 +272,9 @@ function processPool(pool, cfg, forceStrategy) {
       ttlMinutes,
       verdict:    null,
       poolUrl:    pool.pool ? `https://app.meteora.ag/dlmm/${pool.pool}` : null,
+      entryPrice: pool.price ?? null,
+      rangePct:   _rangePct ?? null,
+      rangeLow:   (pool.price != null && _rangePct != null) ? pool.price * (1 - _rangePct) : null,
     }).catch(e => console.warn('[IC] Telegram alert failed:', e.message))
 
     // Fire-and-forget LLM verdict (only if AI enabled in config)

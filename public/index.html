@@ -699,8 +699,18 @@ function loadDecisions() {
   apiFetch('/api/candidates?limit=20&status=active').then(r => r.json()).then(d => {
     const el = document.getElementById('decisions-list')
     if (!d.decisions?.length) { el.innerHTML = '<div class="empty">Belum ada decision aktif.</div>'; return }
+    const fmtSol = (x) => x == null ? '?' : (x >= 1 ? x.toFixed(4) : x >= 0.0001 ? x.toFixed(8) : Number(x).toPrecision(4))
     el.innerHTML = d.decisions.map(dec => {
       const ind = dec.indicators || {}
+      // Entry parameters for MANUAL execution (single-sided SOL bid BELOW price):
+      // place SOL liquidity from entry price down to entry×(1−range_pct) across range_bins.
+      let entryLine = ''
+      if (dec.entry_price_sol != null && dec.range_pct != null) {
+        const hi = dec.entry_price_sol
+        const lo = dec.entry_price_sol * (1 - dec.range_pct)
+        const bins = dec.range_bins != null ? `${dec.range_bins} bin` : ''
+        entryLine = `<div class="dec-summary" style="color:var(--blue)">📍 entry ${fmtSol(hi)} SOL · bid ↓ −${(dec.range_pct*100).toFixed(1)}% → ${fmtSol(lo)}–${fmtSol(hi)} ${bins ? '· '+bins : ''}</div>`
+      }
       const volStr = ind.volatility != null ? `vol ${parseFloat(ind.volatility).toFixed(2)}` : ''
       const feeTvlStr = ind.fee_active_tvl_ratio != null ? `fee/tvl ${(ind.fee_active_tvl_ratio*100).toFixed(1)}%` : ''
       const condLabel = (dec.condition_bucket || '').replace(/_/g,' ')
@@ -717,6 +727,7 @@ function loadDecisions() {
             ${dec.primary_technique ? `<span class="badge ${AUTHOR_BADGE[dec.technique_author]||'badge-gray'}" title="${dec.technique_author||''}" style="font-size:8px">${dec.primary_technique}</span>` : ''}
           </div>
           <div class="dec-summary">${[volStr,feeTvlStr,condLabel].filter(Boolean).join(' · ')}</div>
+          ${entryLine}
           ${dec.llm_verdict ? `<div style="font-size:.65rem;color:var(--muted);font-style:italic;margin-top:2px">"${dec.llm_verdict}"</div>` : ''}
         </div>
         <span class="dec-time">exp ${exp}</span>

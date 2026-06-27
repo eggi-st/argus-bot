@@ -112,13 +112,19 @@ class TelegramNotifier {
 
   // ── Named Templates ────────────────────────────────────────────────────────
 
-  recommendation({ token, strategy, confidence, ttlMinutes, verdict, poolUrl }) {
+  recommendation({ token, strategy, confidence, ttlMinutes, verdict, poolUrl, entryPrice, rangePct, rangeLow }) {
     const stratLabel = { limit_order: 'Limit Order', spot: 'Spot LP', bid_ask: 'Bid Ask' }[strategy] || strategy
     const serverUrl  = process.env.ARGUS_SERVER_URL || `http://localhost:${process.env.PORT || 4000}`
     const verdictLine = verdict ? `\n"${verdict}"` : ''
+    const fmtSol = (x) => x == null ? '?' : (x >= 1 ? x.toFixed(4) : x >= 0.0001 ? x.toFixed(8) : Number(x).toPrecision(4))
+    // Entry parameters for manual execution: single-sided SOL bid BELOW price.
+    const entryLine = (entryPrice != null && rangePct != null)
+      ? `\n📍 entry ${fmtSol(entryPrice)} SOL · bid ↓ −${(rangePct * 100).toFixed(1)}%` +
+        (rangeLow != null ? ` → ${fmtSol(rangeLow)}` : '')
+      : ''
     return this.send(
       `🎯 <b>${token}</b> · ${stratLabel} · ${confidence}% conf · valid ${ttlMinutes}m` +
-      verdictLine + '\n' +
+      entryLine + verdictLine + '\n' +
       (poolUrl ? `<a href="${poolUrl}">Buka pool</a> · ` : '') +
       `<a href="${serverUrl}">Dashboard</a>`,
       'P2'

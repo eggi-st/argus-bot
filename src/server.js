@@ -294,11 +294,15 @@ app.get('/api/candidates', (req, res) => {
     const limit = Math.min(parseInt(req.query.limit || '20', 10), 100)
     const status = req.query.status || 'active'
     const rows = db.prepare(
-      `SELECT id, created_at, expires_at, token_symbol, token_mint, pool_address,
-              strategy, confidence, condition_bucket, status, llm_verdict,
-              indicators_json, strategy_scores_json, primary_technique, technique_author
-       FROM decisions WHERE status = ?
-       ORDER BY created_at DESC LIMIT ?`
+      `SELECT d.id, d.created_at, d.expires_at, d.token_symbol, d.token_mint, d.pool_address,
+              d.strategy, d.confidence, d.condition_bucket, d.status, d.llm_verdict,
+              d.indicators_json, d.strategy_scores_json, d.primary_technique, d.technique_author,
+              dr.entry_price_sol, dr.range_pct, dr.range_bins, dr.sol_amount
+       FROM decisions d
+       LEFT JOIN dry_run_positions dr
+         ON dr.decision_id = d.id AND dr.status = 'open'
+       WHERE d.status = ?
+       ORDER BY d.created_at DESC LIMIT ?`
     ).all(status, limit)
     // Parse JSON fields per-row — bad JSON in one row should not 500 the whole endpoint
     const parsed = rows.map(r => {
