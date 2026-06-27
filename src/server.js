@@ -355,6 +355,32 @@ app.get('/api/dry-run', (req, res) => {
     res.status(500).json({ error: e.message })
   }
 })
+// Full detail for one dry-run position (sim P&L + the REAL entry conditions it screened on)
+app.get('/api/dry-run/:id', (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10)
+    const p = db.prepare(`SELECT * FROM dry_run_positions WHERE id = ?`).get(id)
+    if (!p) return res.status(404).json({ error: 'not found' })
+    let indicators = null
+    if (p.decision_id) {
+      const d = db.prepare(`SELECT indicators_json, condition_bucket, confidence,
+                                   primary_technique, technique_author
+                            FROM decisions WHERE id = ?`).get(p.decision_id)
+      if (d) {
+        try { indicators = d.indicators_json ? JSON.parse(d.indicators_json) : null } catch {}
+        p.condition_bucket   = d.condition_bucket
+        p.confidence         = d.confidence
+        p.primary_technique  = p.entry_technique || d.primary_technique
+        p.technique_author   = d.technique_author
+      }
+    }
+    let exit_metrics = null
+    try { exit_metrics = p.exit_metrics_json ? JSON.parse(p.exit_metrics_json) : null } catch {}
+    res.json({ position: { ...p, indicators, exit_metrics, exit_metrics_json: undefined } })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
 app.get('/api/pattern-library', (req, res) => {
   try {
     const rows = db.prepare(`

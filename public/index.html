@@ -168,6 +168,17 @@
     /* ── Login ──────────────────────────────────────────────────────────────── */
     #login-overlay{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:9999}
     #login-overlay.hidden{display:none}
+    .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(2px);display:flex;align-items:flex-start;justify-content:center;z-index:9998;padding:40px 16px;overflow-y:auto}
+    .modal-overlay.hidden{display:none}
+    #dr-modal-box{position:relative;background:var(--bg2);border:1px solid var(--border);border-radius:14px;width:100%;max-width:520px;padding:22px 24px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+    .modal-x{position:absolute;top:14px;right:16px;background:transparent;border:none;color:var(--muted);font-size:16px;cursor:pointer}
+    .modal-x:hover{color:#e5e7eb}
+    .dr-m-title{font-size:1.05rem;font-weight:700;color:#e5e7eb}
+    .dr-m-sub{font-size:11px;color:var(--muted);margin-top:2px;margin-bottom:14px}
+    .dr-m-sect{font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--muted2);text-transform:uppercase;margin:16px 0 8px;border-top:1px solid var(--border);padding-top:12px}
+    .dr-m-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px 10px}
+    .dr-m-cell .k{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+    .dr-m-cell .v{font-size:13px;color:#e5e7eb;font-weight:600;margin-top:1px}
     #login-box{background:#111827;border:1px solid var(--border);border-radius:14px;padding:36px 44px;width:320px;text-align:center}
     #login-box img{margin-bottom:14px}
     #login-box .brand{color:#818cf8;font-weight:700;font-size:1.4rem;letter-spacing:4px;margin-bottom:6px}
@@ -239,6 +250,14 @@
     <input type="password" id="login-pw" placeholder="Password" autofocus/>
     <button id="login-btn" onclick="doLogin()">Masuk</button>
     <div id="login-error"></div>
+  </div>
+</div>
+
+<!-- Position detail modal -->
+<div id="dr-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeDrModal()">
+  <div id="dr-modal-box">
+    <button class="modal-x" onclick="closeDrModal()">✕</button>
+    <div id="dr-modal-body"></div>
   </div>
 </div>
 
@@ -614,6 +633,65 @@ function switchPage(id) {
   PAGE_LOADERS[id]?.()
 }
 
+// ── Dry-run position detail modal ──────────────────────────────────────────────
+function closeDrModal() { document.getElementById('dr-modal').classList.add('hidden') }
+function openDrModal(id) {
+  const body = document.getElementById('dr-modal-body')
+  body.innerHTML = '<div class="empty">Memuat…</div>'
+  document.getElementById('dr-modal').classList.remove('hidden')
+  apiFetch('/api/dry-run/' + id).then(r => r.json()).then(d => {
+    const p = d.position
+    if (!p) { body.innerHTML = '<div class="empty">Tidak ditemukan.</div>'; return }
+    const ind = p.indicators || {}
+    const pct = (x) => x == null ? '—' : `${x >= 0 ? '+' : ''}${x}%`
+    const fSol = (x) => x == null ? '—' : (Math.abs(x) >= 1 ? x.toFixed(4) : Number(x).toPrecision(4))
+    const cPct = (x) => x == null ? 'color:var(--muted)' : `color:${x >= 0 ? 'var(--green)' : 'var(--red)'}`
+    const noFill = p.net_pnl_pct === 0 && p.gross_pnl_pct === 0
+    const dt = (s) => s ? new Date(s).toLocaleString('id-ID', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—'
+    const cell = (k, v, style='') => `<div class="dr-m-cell"><div class="k">${k}</div><div class="v" style="${style}">${v}</div></div>`
+    const rangeLo = (p.entry_price_sol != null && p.range_pct != null) ? p.entry_price_sol * (1 - p.range_pct) : null
+    body.innerHTML = `
+      <div class="dr-m-title">${p.token_symbol||'?'} <span class="badge ${STRAT_BADGE[p.strategy]||'badge-gray'}">${STRAT_LABEL[p.strategy]||p.strategy}</span></div>
+      <div class="dr-m-sub">${dt(p.opened_at)} → ${dt(p.closed_at)} · <b style="color:var(--muted2)">SIMULASI (paper-trade)</b></div>
+      <div class="dr-m-sect">Hasil simulasi</div>
+      <div class="dr-m-grid">
+        ${cell('Net P&L', noFill?'no fill':pct(p.net_pnl_pct), noFill?'color:var(--muted)':cPct(p.net_pnl_pct))}
+        ${cell('Harga/IL', noFill?'—':pct(p.gross_pnl_pct), noFill?'':cPct(p.gross_pnl_pct))}
+        ${cell('Fees', noFill?'—':pct(p.simulated_fee_pct), noFill?'':'color:#9fd8a0')}
+        ${cell('Slippage', p.simulated_slippage_pct!=null?p.simulated_slippage_pct+'%':'—')}
+        ${cell('Hold', p.hold_minutes!=null?p.hold_minutes+'m':'—')}
+        ${cell('Exit', p.close_reason||'—')}
+      </div>
+      <div class="dr-m-sect">Entry — single-sided SOL bid</div>
+      <div class="dr-m-grid">
+        ${cell('Entry price', fSol(p.entry_price_sol)+' SOL')}
+        ${cell('Exit price', fSol(p.exit_price_sol)+' SOL')}
+        ${cell('Range', rangeLo!=null?`${fSol(rangeLo)}–${fSol(p.entry_price_sol)}`:'—')}
+        ${cell('Bins', p.range_bins!=null?p.range_bins+(p.range_pct!=null?` (−${(p.range_pct*100).toFixed(1)}%)`:''):'—')}
+        ${cell('Stake', p.sol_amount!=null?p.sol_amount+' SOL':'—')}
+        ${cell('Teknik', p.primary_technique?`${p.primary_technique}${p.exit_technique?' → '+p.exit_technique:''}`:'—')}
+      </div>
+      <div class="dr-m-sect">Kondisi entry — nyata (dari screener)</div>
+      <div class="dr-m-grid">
+        ${cell('Volatility', ind.volatility!=null?(+ind.volatility).toFixed(2):'—')}
+        ${cell('Fee/TVL', ind.fee_active_tvl_ratio!=null?(ind.fee_active_tvl_ratio*100).toFixed(1)+'%':'—')}
+        ${cell('Organic', ind.organic_score??'—')}
+        ${cell('Vol Δ', ind.volume_change_pct!=null?pct(Math.round(ind.volume_change_pct)):'—')}
+        ${cell('Price Δ', ind.price_change_pct!=null?pct(Math.round(ind.price_change_pct)):'—')}
+        ${cell('Bucket', (p.condition_bucket||'—').replace(/_/g,' '))}
+      </div>
+      <div class="dr-m-sect">Market / WHO — nyata (dari screener)</div>
+      <div class="dr-m-grid">
+        ${cell('TVL', ind.tvl!=null?'$'+Math.round(ind.tvl).toLocaleString():'—')}
+        ${cell('Holders', ind.holders??'—')}
+        ${cell('Top 10%', ind.top10_pct!=null?ind.top10_pct+'%':'—')}
+        ${cell('Risk', ind.risk_level??'—')}
+        ${cell('Smart money', ind.smart_money_confirmed?'✓':'—')}
+        ${cell('Dev sold', ind.dev_sold_all===true?'⚠ ya':(ind.dev_sold_all===false?'tidak':'—'))}
+      </div>`
+  }).catch(() => { body.innerHTML = '<div class="empty">Gagal memuat.</div>' })
+}
+
 // ── Clock ──────────────────────────────────────────────────────────────────────
 function tickClock() {
   document.getElementById('hdr-ts').textContent =
@@ -850,7 +928,7 @@ function loadDryRun() {
           ? `<span class="badge badge-gray" style="font-size:10px">no fill</span>`
           : `<span style="color:${EXIT_COLOR[exitR]||'var(--muted)'};font-weight:600">${EXIT_LABEL[exitR]||'?'}${inferred ? '<span style="opacity:.4">?</span>' : ''}</span>`
         const openedStr = p.opened_at ? new Date(p.opened_at).toLocaleString('id-ID',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—'
-        return `<div class="tbl-row" style="grid-template-columns:${COLS}">${tok}<span><span class="badge ${STRAT_BADGE[p.strategy]||'badge-gray'}">${STRAT_LABEL[p.strategy]||p.strategy}</span></span>${pnlEl}${gross}${feeEl}<span style="color:var(--muted)">${p.hold_minutes != null ? p.hold_minutes+'m' : '—'}</span><span style="color:var(--muted);font-size:11px">${openedStr}</span>${exitEl}</div>`
+        return `<div class="tbl-row" style="grid-template-columns:${COLS};cursor:pointer" onclick="openDrModal(${p.id})" title="Klik untuk detail lengkap">${tok}<span><span class="badge ${STRAT_BADGE[p.strategy]||'badge-gray'}">${STRAT_LABEL[p.strategy]||p.strategy}</span></span>${pnlEl}${gross}${feeEl}<span style="color:var(--muted)">${p.hold_minutes != null ? p.hold_minutes+'m' : '—'}</span><span style="color:var(--muted);font-size:11px">${openedStr}</span>${exitEl}</div>`
       }).join('')
       closedEl.innerHTML = `<div class="tbl-wrap">${header + rows}</div>`
     }
