@@ -209,6 +209,8 @@
       header{left:0;padding:0 12px;gap:8px}
       header h1{white-space:nowrap}
       header h1 .ver{display:none}
+      /* Active Decisions: let the summary/entry lines wrap instead of truncating */
+      .dec-summary{white-space:normal;text-overflow:clip;overflow:visible;text-align:left}
       #hdr-ts{display:none}
       #hdr-status{gap:4px}
       /* Sidebar → bottom bar */
@@ -782,7 +784,8 @@ const STRAT_LABEL = { spot:'Spot', bid_ask:'Bid Ask', limit_order:'Limit Order',
 function loadDecisions() {
   apiFetch('/api/candidates?limit=20&status=active').then(r => r.json()).then(d => {
     const el = document.getElementById('decisions-list')
-    if (!d.decisions?.length) { el.innerHTML = '<div class="empty">Belum ada decision aktif.</div>'; return }
+    if (!d.decisions?.length) { el.className = 'empty'; el.innerHTML = 'Belum ada decision aktif.'; return }
+    el.className = ''  // drop the centered .empty styling once we render real rows
     const fmtSol = (x) => x == null ? '?' : (x >= 1 ? x.toFixed(4) : x >= 0.0001 ? x.toFixed(8) : Number(x).toPrecision(4))
     el.innerHTML = d.decisions.map(dec => {
       const ind = dec.indicators || {}
