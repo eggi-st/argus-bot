@@ -186,10 +186,13 @@ const DEFAULTS = {
     solAmount: 0.1,
     // ── Phase 2 outcome-driven exits (single-sided-aware; act on computed P&L) ──
     // Hold is decoupled from the short recommendation TTL so a real exit can be observed.
-    netTargetPct: 5,      // take profit when net (gross + fee − slip) ≥ this
+    // TP aligned to the calibrated fee model: fees cap at 3% so net realistically tops out
+    // ~+3%; a 5% target was unreachable → every position rode to max_hold ("time"). 2.5% lets
+    // TP actually fire when fees accrue + price holds, so closes are faster & varied.
+    netTargetPct: 2.5,    // take profit when net (gross + fee − slip) ≥ this
     ilStopPct: 15,        // stop loss when single-sided IL ≤ −this
     runUpExitPct: 30,     // price ran ≥ this above entry → SOL bid won't fill, reclaim capital
-    maxHoldMinutes: 240,  // time-bound fallback (4h)
+    maxHoldMinutes: 120,  // time-bound fallback (2h) — matches real Meridian hold times (median ~60-90m)
     // Fee simulation (net_pnl = single-sided P&L + fee estimate − fill-scaled slippage).
     // CONSERVATIVE by design: fees are a capped estimate, NOT an IL-modeled LP return.
     // CALIBRATED to reality (2026-06-27): the old cap=10 + no haircut gave dry-run
