@@ -22,8 +22,9 @@ function computeSimulatedFeePct(entryFeeRate, holdMinutes, feeWindowMins, opts =
   const simulateFees  = opts.simulateFees !== false
   const maxFeePct     = opts.maxFeePct ?? 10
   const inRangeFactor = opts.inRangeFactor ?? IN_RANGE_FACTOR
+  const haircut       = opts.haircut ?? 1   // fraction of snapshot fee-rate actually captured (reality calibration)
   if (!simulateFees || entryFeeRate == null || !(holdMinutes > 0) || !(feeWindowMins > 0)) return 0
-  const raw = entryFeeRate * (holdMinutes / feeWindowMins) * inRangeFactor * 100
+  const raw = entryFeeRate * (holdMinutes / feeWindowMins) * inRangeFactor * haircut * 100
   const capped = Math.min(Math.max(raw, 0), maxFeePct)
   return Math.round(capped * 100) / 100
 }
@@ -191,7 +192,8 @@ async function updateOpenPositions() {
         : 0
       const simulatedFeePct = computeSimulatedFeePct(
         pos.entry_fee_rate ?? null, holdMinutes, feeWindowMins,
-        { simulateFees: drCfg.simulateFees, maxFeePct: drCfg.maxSimulatedFeePct, inRangeFactor: fillFraction }
+        { simulateFees: drCfg.simulateFees, maxFeePct: drCfg.maxSimulatedFeePct,
+          inRangeFactor: fillFraction, haircut: drCfg.feeCaptureHaircut ?? 1 }
       )
       // SLIPPAGE REALISM (Phase 2): only the SOL that actually swapped pays slippage. A bid that
       // never fills (price ran up) costs ~0 — NOT the old flat 0.6% that floored every no-fill at −0.6%.

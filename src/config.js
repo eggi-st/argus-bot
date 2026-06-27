@@ -187,8 +187,13 @@ const DEFAULTS = {
     maxHoldMinutes: 240,  // time-bound fallback (4h)
     // Fee simulation (net_pnl = single-sided P&L + fee estimate − fill-scaled slippage).
     // CONSERVATIVE by design: fees are a capped estimate, NOT an IL-modeled LP return.
+    // CALIBRATED to reality (2026-06-27): the old cap=10 + no haircut gave dry-run
+    // avg +5.47%/79% WR while Meridian's 428 REAL closes averaged −0.10%/60% WR — the
+    // gap was almost entirely an over-generous fee credit. cap=3 + haircut=0.5 lands
+    // dry-run at ~+0.3%/58%, in line with reality. Tune these to re-anchor as data grows.
     simulateFees: true,
-    maxSimulatedFeePct: 10,   // cap fee credit (pp) so extreme pool yields can't dominate
+    maxSimulatedFeePct: 3,    // cap fee credit (pp). Was 10 — single-sided LP rarely nets >3% in fees.
+    feeCaptureHaircut: 0.5,   // fraction of the snapshot fee-rate actually captured over the hold
     inRangeFactor: 0.6,       // fraction of hold assumed in active range while earning fees
   },
   wallet: {
