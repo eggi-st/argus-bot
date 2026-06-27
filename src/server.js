@@ -56,6 +56,10 @@ function rateLimiter(req, res, next) {
 // ── Auth middleware ───────────────────────────────────────────────────────────
 function authMiddleware(req, res, next) {
   if (!AUTH_TOKEN) return next()
+  // Localhost bot-to-bot: Meridian (same VPS) reads the read-only /api/meridian/* suggestion
+  // + pool-signal endpoints over loopback without the dashboard token. External callers still
+  // need the token. Mirrors the /api/feedback localhost exemption (Meridian → Argus push).
+  if (isLocalhost(req) && (req.originalUrl || '').startsWith('/api/meridian/')) return next()
   const token = req.headers['x-auth-token'] || req.query.token
   if (token === AUTH_TOKEN) return next()
   res.status(401).json({ ok: false, error: 'Unauthorized' })
