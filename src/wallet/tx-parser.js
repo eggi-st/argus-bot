@@ -72,12 +72,24 @@ function parseMeteoraTx(txResult, signature) {
     ? new Date(txResult.blockTime * 1000).toISOString()
     : new Date().toISOString()
 
+  // Net SOL movement of the fee payer (accountKeys[0]). For a wallet acting on its
+  // OWN position the fee payer IS that wallet, so this ≈ the SOL it moved:
+  //   add_liquidity → negative (SOL out), remove/claim → positive (SOL in).
+  // Approximate (includes tx fee + WSOL rent), but enough to size each action.
+  const pre = txResult.meta?.preBalances
+  const post = txResult.meta?.postBalances
+  let solDelta = null
+  if (Array.isArray(pre) && Array.isArray(post) && pre.length && post.length) {
+    solDelta = Math.round(((post[0] - pre[0]) / 1e9) * 1000) / 1000
+  }
+
   return {
     signature,
     actionType,
     involvedAccounts,
     allAccounts,
     blockTime,
+    solDelta,
   }
 }
 

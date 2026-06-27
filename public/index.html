@@ -1043,17 +1043,36 @@ function loadWalletActions() {
     el('wo-followed', followed.length)
     const wtEl = document.getElementById('wallet-table')
     if (!wallets.length) return
-    if (!d.actions?.length) { wtEl.innerHTML = '<div class="empty">Belum ada aksi on-chain.</div>'; return }
-    const COLS = '45px 120px 100px 85px 70px 1fr'
-    const header = `<div class="tbl-head" style="grid-template-columns:${COLS}"><span>Time</span><span>Action</span><span>Token</span><span>Wallet</span><span>Match</span><span>Strategy</span></div>`
-    const rows = d.actions.slice(0, 25).map(a => {
-      const ts = new Date(a.detected_at).toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'})
-      const tok = a.token_symbol || a.token_mint?.slice(0,8) || '—'
-      const wPill = a.wallet_type === 'smart_money' ? `<span class="badge badge-yellow">${a.wallet_label||'whale'}</span>` : `<span class="badge badge-blue">${a.wallet_label||'own'}</span>`
-      const mPill = a.match_category === 'followed' ? `<span class="badge badge-green">followed</span>` : `<span class="badge badge-gray">own</span>`
-      return `<div class="tbl-row" style="grid-template-columns:${COLS}"><span style="color:var(--muted)">${ts}</span><span style="font-size:12px">${(a.action_type||'').replace(/_/g,' ')}</span><span>${tok}</span><span>${wPill}</span><span>${mPill}</span><span style="color:var(--muted);font-size:11px">${a.strategy||'—'}</span></div>`
-    }).join('')
-    wtEl.innerHTML = `<div class="tbl-wrap">${header + rows}</div>`
+    const acts = d.actions || []
+    const smActs  = acts.filter(a => a.wallet_type === 'smart_money')
+    const ownActs = acts.filter(a => a.wallet_type !== 'smart_money')
+    const smCount = wallets.filter(w => w.type === 'smart_money').length
+    const ts  = a => new Date(a.detected_at).toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'})
+    const tokOf = a => a.token_symbol || a.token_mint?.slice(0,8) || '<span style="color:var(--muted)">—</span>'
+    const amt = a => a.amount_sol == null ? '<span style="color:var(--muted)">—</span>'
+      : `<span style="color:${a.amount_sol < 0 ? '#e9a3a3' : '#9fd8a0'}">${a.amount_sol >= 0 ? '+' : ''}${a.amount_sol} SOL</span>`
+    const sect = (title, sub) => `<div style="font-size:11px;font-weight:700;color:var(--muted);margin:14px 0 6px;letter-spacing:.04em">${title}${sub ? ` <span style="font-weight:400;text-transform:none;letter-spacing:0">— ${sub}</span>` : ''}</div>`
+
+    // 🐋 Smart money — the unique signal (sparse: whales hold, so new LP actions are rare)
+    let html = sect('🐋 SMART MONEY')
+    if (smActs.length) {
+      const C = '50px 120px 95px 95px 1fr'
+      html += `<div class="tbl-wrap"><div class="tbl-head" style="grid-template-columns:${C}"><span>Time</span><span>Action</span><span>Token</span><span>Amount</span><span>Wallet</span></div>` +
+        smActs.slice(0,15).map(a => `<div class="tbl-row" style="grid-template-columns:${C}"><span style="color:var(--muted)">${ts(a)}</span><span style="font-size:12px">${(a.action_type||'').replace(/_/g,' ')}</span><span>${tokOf(a)}</span><span style="font-size:11px">${amt(a)}</span><span><span class="badge badge-yellow">${a.wallet_label||'whale'}</span></span></div>`).join('') + `</div>`
+    } else {
+      html += `<div class="empty" style="font-size:12px;line-height:1.5">${smCount} whale dilacak — belum ada aksi LP <b>baru</b> sejak dilacak (whale cenderung <i>hold</i> posisi berhari-hari).<br><span style="color:var(--muted2)">Pool yang mereka pegang + "Last Active" tiap whale ada di halaman <b>Hivemind</b>.</span></div>`
+    }
+
+    // 👤 Own (Meridian) — frequent but the rich version (P&L/strategy/technique) lives in Outcomes
+    html += sect('👤 OWN (MERIDIAN)', 'P&L / strategi / teknik lengkap di halaman Meridian Outcomes')
+    if (ownActs.length) {
+      const C = '50px 120px 95px 95px 1fr'
+      html += `<div class="tbl-wrap"><div class="tbl-head" style="grid-template-columns:${C}"><span>Time</span><span>Action</span><span>Token</span><span>Amount</span><span>Pool</span></div>` +
+        ownActs.slice(0,20).map(a => `<div class="tbl-row" style="grid-template-columns:${C}"><span style="color:var(--muted)">${ts(a)}</span><span style="font-size:12px">${(a.action_type||'').replace(/_/g,' ')}</span><span>${tokOf(a)}</span><span style="font-size:11px">${amt(a)}</span><span style="color:var(--muted);font-size:10px">${a.pool_address ? a.pool_address.slice(0,8)+'…' : '—'}</span></div>`).join('') + `</div>`
+    } else {
+      html += `<div class="empty">Belum ada aksi own.</div>`
+    }
+    wtEl.innerHTML = html
   }).catch(() => {})
 }
 

@@ -95,7 +95,7 @@ async function processAction(action, wallet, { recordWalletAction, markFollowed 
     token_mint:          match.tokenMint,
     token_symbol:        match.tokenSymbol,
     strategy:            match.strategy,
-    amount_sol:          null,
+    amount_sol:          action.solDelta ?? null,
     matched_decision_id: match.matchedDecisionId,
     match_category:      match.matchCategory,
     wallet_address:      wallet.address,
