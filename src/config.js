@@ -124,6 +124,11 @@ const DEFAULTS = {
       { profile: 'spot',        strategy: 'spot' },
       { profile: 'limit_order', strategy: 'limit_order' },
     ],
+    // Exploration quota: when every candidate in a pipeline is blocked by the active-pattern
+    // gate, force the top candidate through (bypassing statistical gate, keeping confidence
+    // floor). Guarantees at least 1 dry-run sample per pipeline per scan, preventing the
+    // gate from starving new dimensions of data they need to get promoted.
+    explorationQuota: { enabled: true },
   },
   learning: {
     // Pattern confidence gate — blocks (strategy × condition) combos with no proven edge.

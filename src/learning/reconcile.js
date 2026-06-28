@@ -46,19 +46,22 @@ function reconcilePatterns() {
     GROUP BY condition_bucket, strategy
   `).all()
 
-  // Merge both rollups keyed on the PARSED pattern (vol×regime×strategy) — different raw
-  // condition_bucket strings can map to the same (vol,regime), so accumulate by parsed key.
+  // Merge both rollups keyed on all 5 parsed dimensions — different raw condition_bucket
+  // strings can map to the same (vol, regime, fee, age), so accumulate by parsed key.
   const merged = new Map()
   const addRow = (r, kind) => {
-    const { volatility_bucket, regime } = parseBucket(r.bucket)
+    const { volatility_bucket, fee_bucket, regime, age_bucket } = parseBucket(r.bucket)
     if (!volatility_bucket || !regime) return
-    const key = `${volatility_bucket}::${regime}::${r.strategy}`
+    const key = `${volatility_bucket}::${regime}::${fee_bucket}::${age_bucket}::${r.strategy}`
     let e = merged.get(key)
-    if (!e) { e = { volatility_bucket, regime, strategy: r.strategy, sim: null, real: null }; merged.set(key, e) }
+    if (!e) {
+      e = { volatility_bucket, regime, fee_bucket, age_bucket, strategy: r.strategy, sim: null, real: null }
+      merged.set(key, e)
+    }
     if (!e[kind]) e[kind] = { n: 0, wins: 0, sumPnl: 0, winPnlSum: 0, lossPnlSum: 0 }
-    e[kind].n        += r.n
-    e[kind].wins     += r.wins
-    e[kind].sumPnl   += (r.mean_pnl || 0) * r.n
+    e[kind].n          += r.n
+    e[kind].wins       += r.wins
+    e[kind].sumPnl     += (r.mean_pnl || 0) * r.n
     e[kind].winPnlSum  += r.win_pnl_sum  || 0
     e[kind].lossPnlSum += r.loss_pnl_sum || 0
   }
@@ -68,7 +71,7 @@ function reconcilePatterns() {
   let changed = 0, realCount = 0, simCount = 0
   const apply = db.transaction(() => {
     for (const m of merged.values()) {
-      const { volatility_bucket, regime } = m
+      const { volatility_bucket, regime, fee_bucket, age_bucket } = m
       const sim  = m.sim  ? { ...m.sim,  mean_pnl: m.sim.n  ? m.sim.sumPnl  / m.sim.n  : 0,
                                           winPnlSum: m.sim.winPnlSum, lossPnlSum: m.sim.lossPnlSum } : null
       const real = m.real ? { ...m.real, mean_pnl: m.real.n ? m.real.sumPnl / m.real.n : 0,
@@ -83,7 +86,6 @@ function reconcilePatterns() {
       // Only REAL-backed patterns are promoted to 'active' (drives confidence). Sim-only
       // patterns stay inactive → adjustScore treats them as neutral (no confidence boost).
       // useReal already requires real.n >= minRealSamples; promotion needs real.n >= threshold.
-      // Was: Math.min(threshold, minRealSamples) = Math.min(45, 20) = 20 → threshold ignored.
       const active = (useReal && real.n >= threshold) ? 1 : 0
       if (useReal) realCount++; else simCount++
       const reality_gap = (realWr != null && simWr != null) ? (realWr - simWr) : null
@@ -92,13 +94,13 @@ function reconcilePatterns() {
       // payoff_ratio = avg_win_pnl / |avg_loss_pnl| — blocks patterns with bad risk/reward
       // even when win_rate looks acceptable (e.g. wins +0.5%, losses -8% = terrible payoff).
       const lossCount = chosen.n - chosen.wins
-      const avg_win_pnl  = chosen.wins   > 0 ? chosen.winPnlSum  / chosen.wins   : null
-      const avg_loss_pnl = lossCount     > 0 ? chosen.lossPnlSum / lossCount      : null
+      const avg_win_pnl  = chosen.wins > 0 ? chosen.winPnlSum  / chosen.wins : null
+      const avg_loss_pnl = lossCount   > 0 ? chosen.lossPnlSum / lossCount   : null
 
       const before = db.prepare(
-        `SELECT win_rate, sample_count, active, source FROM pattern_library WHERE volatility_bucket=? AND regime=? AND strategy=?`
-      ).get(volatility_bucket, regime, m.strategy)
-      recordPatternReconciled(volatility_bucket, regime, m.strategy, {
+        `SELECT win_rate, sample_count, active, source FROM pattern_library WHERE volatility_bucket=? AND regime=? AND strategy=? AND fee_bucket=? AND age_bucket=?`
+      ).get(volatility_bucket, regime, m.strategy, fee_bucket, age_bucket)
+      recordPatternReconciled(volatility_bucket, regime, m.strategy, fee_bucket, age_bucket, {
         updated_at: now, win_rate, mean_pnl_net: chosen.mean_pnl ?? 0,
         sample_count: chosen.n, wins: chosen.wins, active, last_reconciled_at: now,
         source,
@@ -110,7 +112,7 @@ function reconcilePatterns() {
         Math.abs((before.win_rate || 0) - win_rate) > 1e-9 || before.active !== active || before.source !== source
       if (moved) {
         changed++
-        console.log(`[Reconcile] ${volatility_bucket}×${regime}×${m.strategy} [${source}]: N=${chosen.n} ` +
+        console.log(`[Reconcile] ${volatility_bucket}×${regime}×${fee_bucket}×${age_bucket}×${m.strategy} [${source}]: N=${chosen.n} ` +
           `WR ${(win_rate * 100).toFixed(0)}% active=${active}` + (reality_gap != null ? ` gap ${(reality_gap*100).toFixed(0)}pp` : ''))
       }
     }

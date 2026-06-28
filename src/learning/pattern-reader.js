@@ -1,14 +1,15 @@
 'use strict'
 const db = require('../db/database')
 
-function getPattern(volatilityBucket, regime, strategy) {
+function getPattern(volatilityBucket, regime, strategy, feeBucket = 'medium', ageBucket = 'new') {
   return db.prepare(`
     SELECT win_rate, mean_pnl_net, sample_count, active, wins, ema_win_rate, source,
            avg_win_pnl, avg_loss_pnl
     FROM pattern_library
     WHERE volatility_bucket = ? AND regime = ? AND strategy = ?
+      AND fee_bucket = ? AND age_bucket = ?
     LIMIT 1
-  `).get(volatilityBucket, regime, strategy)
+  `).get(volatilityBucket, regime, strategy, feeBucket, ageBucket)
 }
 
 /**
@@ -74,9 +75,9 @@ function adjustScore(rawScore, pattern, cfg, strategy) {
 /**
  * One-line context string for the LLM prompt / dashboard.
  */
-function getPatternContext(volatilityBucket, regime, strategy, cfg) {
+function getPatternContext(volatilityBucket, regime, strategy, cfg, feeBucket = 'medium', ageBucket = 'new') {
   const threshold = cfg?.learning?.promotionThreshold ?? 60
-  const p = getPattern(volatilityBucket, regime, strategy)
+  const p = getPattern(volatilityBucket, regime, strategy, feeBucket, ageBucket)
   if (!p || p.sample_count === 0) return 'No historical data yet'
   if (!p.active) return `Calibrating (N=${p.sample_count}/${threshold})`
   const wr  = (p.win_rate * 100).toFixed(0)

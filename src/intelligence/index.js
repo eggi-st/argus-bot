@@ -79,22 +79,26 @@ function checkPatternGate(pattern, confidence, gateCfg = {}) {
 
 /**
  * Classify a pool into a condition bucket for Pattern Library lookup.
- * Format: "<volBucket>_vol_<feeBucket>_yield_<regime>"
+ * Format: "<volBucket>_vol_<feeBucket>_yield_<regime>_<ageBucket>"
+ * Age thresholds: new (<48h), established (48h–168h), veteran (>168h).
+ * Null token_age_hours (data unavailable) is treated as 'new'.
  */
 function conditionBucket(pool) {
-  const vol = pool.volatility ?? 0
-  const feeTvl = pool.fee_active_tvl_ratio ?? 0
+  const vol      = pool.volatility ?? 0
+  const feeTvl   = pool.fee_active_tvl_ratio ?? 0
   const pricePct = pool.price_change_pct ?? 0
-  const volPct = pool.volume_change_pct ?? 0
+  const volPct   = pool.volume_change_pct ?? 0
+  const ageHours = pool.token_age_hours ?? 0
 
   const volBucket = vol > 2 ? 'high' : vol > 1 ? 'medium' : 'low'
   const feeBucket = feeTvl > 0.3 ? 'high' : feeTvl > 0.1 ? 'medium' : 'low'
-  const regime = pricePct > 5 && volPct > 30 ? 'recovery'
+  const regime    = pricePct > 5 && volPct > 30 ? 'recovery'
     : pricePct < -5 ? 'decline'
     : feeTvl > 0.3 ? 'froth'
     : 'neutral'
+  const ageBucket = ageHours < 48 ? 'new' : ageHours < 168 ? 'established' : 'veteran'
 
-  return `${volBucket}_vol_${feeBucket}_yield_${regime}`
+  return `${volBucket}_vol_${feeBucket}_yield_${regime}_${ageBucket}`
 }
 
 /**
@@ -132,9 +136,10 @@ function resolveScreening(cfg, profileKey) {
  * Score, gate, and (if it passes) record a decision for ONE pool under ONE pipeline.
  * The pipeline forces `forceStrategy` — it records only that strategy, so each strategy
  * accumulates samples from its own universe instead of bid_ask winning a single pool.
+ * exploration=true: bypass the active-pattern statistical gate (guarantees sample collection).
  * Returns a decision summary, or null if the pool was skipped/gated/ineligible.
  */
-function processPool(pool, cfg, forceStrategy) {
+function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
   // Per-token gate check
   const tokenGate = riskState.check(pool.base?.mint)
   if (!tokenGate.allowed) {
@@ -156,7 +161,7 @@ function processPool(pool, cfg, forceStrategy) {
   const ttlMinutes = calcTtlMinutes(pool)
   const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString()
   const bucket = conditionBucket(pool)
-  const { volatility_bucket, regime } = parseBucket(bucket)
+  const { volatility_bucket, fee_bucket, regime, age_bucket } = parseBucket(bucket)
   const gateCfg = cfg.learning?.confidenceGate ?? {}
   const gateEnabled = gateCfg.enabled !== false
 
@@ -167,16 +172,26 @@ function processPool(pool, cfg, forceStrategy) {
     return null
   }
 
-  const pat = getPattern(volatility_bucket, regime, forceStrategy)
+  const pat = getPattern(volatility_bucket, regime, forceStrategy, fee_bucket, age_bucket)
   const adj = adjustScore(score.score, pat, cfg, forceStrategy)
   if (pat?.active) {
-    console.log(`[IC] Pattern ${volatility_bucket}×${regime}×${forceStrategy}: WR=${(pat.win_rate*100).toFixed(0)}% N=${pat.sample_count} → ${(score.score*100).toFixed(0)}→${(adj*100).toFixed(0)}%`)
+    console.log(`[IC] Pattern ${volatility_bucket}×${regime}×${fee_bucket}×${age_bucket}×${forceStrategy}: WR=${(pat.win_rate*100).toFixed(0)}% N=${pat.sample_count} → ${(score.score*100).toFixed(0)}→${(adj*100).toFixed(0)}%`)
   }
   if (gateEnabled) {
-    const gate = checkPatternGate(pat, adj, gateCfg)
-    if (gate.blocked) {
-      console.log(`[IC] Gate blocked ${pool.base?.symbol} ${forceStrategy}: ${gate.reason}`)
-      return null
+    if (!exploration) {
+      const gate = checkPatternGate(pat, adj, gateCfg)
+      if (gate.blocked) {
+        console.log(`[IC] Gate blocked ${pool.base?.symbol} ${forceStrategy}: ${gate.reason}`)
+        return null
+      }
+    } else {
+      // Exploration mode: skip active-pattern statistical gates, but keep the confidence floor
+      // so we don't open on genuinely terrible candidates.
+      const minConfidence = gateCfg.minConfidence ?? 0.15
+      if (adj < minConfidence) {
+        console.log(`[IC] Exploration skipped ${pool.base?.symbol} (conf ${(adj*100).toFixed(0)}% < floor ${minConfidence*100}%)`)
+        return null
+      }
     }
   }
 
@@ -251,6 +266,7 @@ function processPool(pool, cfg, forceStrategy) {
       technique: pool.lo_shadow.technique, confirmed: pool.lo_shadow.confirmed,
       reason: pool.lo_shadow.reason, skipped: pool.lo_shadow.skipped || false,
     } : null,
+    ...(exploration ? { exploration: true } : {}),
   }
   pool.entry_technique = primaryTechnique  // flows into the dry-run position record
 
@@ -357,6 +373,7 @@ async function runScan() {
       { profile: 'bid_ask', strategy: 'bid_ask' },
       { profile: 'spot',    strategy: 'spot' },
     ]
+    const quotaEnabled = cfg.scan?.explorationQuota?.enabled !== false
 
     const decisions = []
     let totalScreened = 0
@@ -388,9 +405,21 @@ async function runScan() {
         catch (e) { console.warn('[IC] spot indicator enrich failed:', e.message) }
       }
 
+      let pipeDecisions = 0
       for (const pool of res.candidates) {
         const dec = processPool(pool, cfg, pipe.strategy)
-        if (dec) decisions.push(dec)
+        if (dec) { decisions.push(dec); pipeDecisions++ }
+      }
+
+      // Exploration quota: if pattern gate blocked every candidate, force the top-scored
+      // candidate through (bypassing active-pattern statistical checks) so every pipeline
+      // always gathers at least one learning sample per scan.
+      if (quotaEnabled && pipeDecisions === 0 && res.candidates.length > 0) {
+        const dec = processPool(res.candidates[0], cfg, pipe.strategy, { exploration: true })
+        if (dec) {
+          decisions.push(dec)
+          console.log(`[IC] Pipeline ${pipe.profile} exploration quota → decision #${dec.id}`)
+        }
       }
     }
 

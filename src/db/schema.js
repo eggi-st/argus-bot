@@ -321,6 +321,11 @@ function migrateSchema() {
   }
   if (added) console.log(`[Schema] Added ${added} column(s) via migration`)
 
+  // Multi-dim pattern matrix (2026-06-29): extend UNIQUE key from (vol, regime, strategy)
+  // to (vol, regime, strategy, fee_bucket, age_bucket). SQLite cannot ALTER a UNIQUE
+  // constraint — requires a full table recreation. Safe: reconcile.js rebuilds from source.
+  migratePatternLibraryMultiDim()
+
   // techniques registry — the third axis (provenance). Seeded from the static catalogue.
   try {
     db.exec(`
@@ -378,6 +383,63 @@ function migrateSchema() {
   } catch (e) {
     if (!e.message?.includes('already exists')) console.warn('[Schema] feedback_outcomes:', e.message)
   }
+}
+
+// Rebuild pattern_library with a 5-dim UNIQUE key (vol×regime×strategy×fee_bucket×age_bucket).
+// Guard: checks the CREATE TABLE SQL — if fee_bucket is absent, the old 3-dim table is live.
+// All existing rows are carried over with defaults fee_bucket='medium', age_bucket='new'.
+// Idempotent: no-op on an already-migrated DB.
+function migratePatternLibraryMultiDim() {
+  const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='pattern_library'`).get()
+  if (!row || row.sql?.includes('fee_bucket')) return
+
+  console.log('[Schema] Rebuilding pattern_library → 5-dim UNIQUE (vol×regime×strategy×fee×age)')
+  db.transaction(() => {
+    db.exec(`
+      CREATE TABLE pattern_library_v2 (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        updated_at        TEXT    NOT NULL,
+        volatility_bucket TEXT    NOT NULL,
+        regime            TEXT    NOT NULL,
+        strategy          TEXT    NOT NULL,
+        fee_bucket        TEXT    NOT NULL DEFAULT 'medium',
+        age_bucket        TEXT    NOT NULL DEFAULT 'new',
+        win_rate          REAL,
+        mean_pnl_net      REAL,
+        sample_count      INTEGER DEFAULT 0,
+        active            INTEGER DEFAULT 0,
+        wins              INTEGER DEFAULT 0,
+        ema_win_rate      REAL,
+        last_reconciled_at TEXT,
+        source            TEXT,
+        live_win_rate     REAL,
+        live_mean_pnl     REAL,
+        live_sample_count INTEGER DEFAULT 0,
+        sim_win_rate      REAL,
+        sim_sample_count  INTEGER DEFAULT 0,
+        reality_gap       REAL,
+        avg_win_pnl       REAL,
+        avg_loss_pnl      REAL,
+        UNIQUE(volatility_bucket, regime, strategy, fee_bucket, age_bucket)
+      )
+    `)
+    db.exec(`
+      INSERT OR IGNORE INTO pattern_library_v2
+        (updated_at, volatility_bucket, regime, strategy, fee_bucket, age_bucket,
+         win_rate, mean_pnl_net, sample_count, active, wins, ema_win_rate, last_reconciled_at,
+         source, live_win_rate, live_mean_pnl, live_sample_count,
+         sim_win_rate, sim_sample_count, reality_gap, avg_win_pnl, avg_loss_pnl)
+      SELECT updated_at, volatility_bucket, regime, strategy, 'medium', 'new',
+         win_rate, mean_pnl_net, sample_count, active, COALESCE(wins,0), ema_win_rate, last_reconciled_at,
+         source, live_win_rate, live_mean_pnl, COALESCE(live_sample_count,0),
+         sim_win_rate, COALESCE(sim_sample_count,0), reality_gap, avg_win_pnl, avg_loss_pnl
+      FROM pattern_library
+    `)
+    db.exec(`DROP TABLE pattern_library`)
+    db.exec(`ALTER TABLE pattern_library_v2 RENAME TO pattern_library`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_pattern_active ON pattern_library(active)`)
+  })()
+  console.log('[Schema] pattern_library rebuild complete')
 }
 
 // Seed/refresh the technique registry from the static catalogue. INSERT OR REPLACE so
@@ -513,17 +575,20 @@ function recordWalletAction(data) {
  * Authoritative pattern write used by the reconciliation job — overwrites win_rate/wins/
  * mean_pnl/sample_count/active recomputed from source. Does NOT touch ema_win_rate (no
  * per-sample replay in v1; the EMA is a best-effort live-scoring signal only).
+ * feeBucket and ageBucket are the two new dimensions added in the 5-dim schema migration.
  */
-function recordPatternReconciled(vb, regime, strategy, d) {
-  return getStmt('reconcilePattern', `
+function recordPatternReconciled(vb, regime, strategy, feeBucket, ageBucket, d) {
+  return getStmt('reconcilePattern5d', `
     INSERT INTO pattern_library
-      (updated_at, volatility_bucket, regime, strategy, win_rate, mean_pnl_net, sample_count, active, wins, last_reconciled_at,
+      (updated_at, volatility_bucket, regime, strategy, fee_bucket, age_bucket,
+       win_rate, mean_pnl_net, sample_count, active, wins, last_reconciled_at,
        source, live_win_rate, live_mean_pnl, live_sample_count, sim_win_rate, sim_sample_count, reality_gap,
        avg_win_pnl, avg_loss_pnl)
-    VALUES (@updated_at, @vb, @regime, @strategy, @win_rate, @mean_pnl_net, @sample_count, @active, @wins, @last_reconciled_at,
+    VALUES (@updated_at, @vb, @regime, @strategy, @fee_bucket, @age_bucket,
+       @win_rate, @mean_pnl_net, @sample_count, @active, @wins, @last_reconciled_at,
        @source, @live_win_rate, @live_mean_pnl, @live_sample_count, @sim_win_rate, @sim_sample_count, @reality_gap,
        @avg_win_pnl, @avg_loss_pnl)
-    ON CONFLICT(volatility_bucket, regime, strategy) DO UPDATE SET
+    ON CONFLICT(volatility_bucket, regime, strategy, fee_bucket, age_bucket) DO UPDATE SET
       updated_at         = excluded.updated_at,
       win_rate           = excluded.win_rate,
       mean_pnl_net       = excluded.mean_pnl_net,
@@ -540,7 +605,7 @@ function recordPatternReconciled(vb, regime, strategy, d) {
       reality_gap        = excluded.reality_gap,
       avg_win_pnl        = excluded.avg_win_pnl,
       avg_loss_pnl       = excluded.avg_loss_pnl
-  `).run({ vb, regime, strategy,
+  `).run({ vb, regime, strategy, fee_bucket: feeBucket, age_bucket: ageBucket,
     source: null, live_win_rate: null, live_mean_pnl: null, live_sample_count: 0,
     sim_win_rate: null, sim_sample_count: 0, reality_gap: null,
     avg_win_pnl: null, avg_loss_pnl: null, ...d })

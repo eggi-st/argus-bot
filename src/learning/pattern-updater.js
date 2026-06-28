@@ -4,16 +4,25 @@ const db  = require('../db/database')
 const { getConfig } = require('../config')
 
 /**
- * Parse conditionBucket string (e.g. "low_vol_medium_yield_neutral")
- * into the two dimensions used by pattern_library.
+ * Parse conditionBucket string into the 4 dimensions stored in pattern_library.
+ * Format: "${volBucket}_vol_${feeBucket}_yield_${regime}_${ageBucket}"
+ * Example: "low_vol_medium_yield_neutral_new"
+ * parts:    [0]  [1]  [2]     [3]     [4]     [5]
+ *
+ * Old 5-part strings (no ageBucket) are backward compatible: parts[5] is undefined → 'new'.
+ * fee_bucket was always embedded in position [2] but was previously ignored.
  */
 function parseBucket(conditionBucket) {
   const parts = (conditionBucket || '').split('_')
   const VALID_VOL    = new Set(['low', 'medium', 'high'])
+  const VALID_FEE    = new Set(['low', 'medium', 'high'])
   const VALID_REGIME = new Set(['recovery', 'neutral', 'decline', 'froth'])
+  const VALID_AGE    = new Set(['new', 'established', 'veteran'])
   return {
-    volatility_bucket: VALID_VOL.has(parts[0])    ? parts[0]                : 'medium',
-    regime:            VALID_REGIME.has(parts[parts.length - 1]) ? parts[parts.length - 1] : 'neutral',
+    volatility_bucket: VALID_VOL.has(parts[0])    ? parts[0] : 'medium',
+    fee_bucket:        VALID_FEE.has(parts[2])    ? parts[2] : 'medium',
+    regime:            VALID_REGIME.has(parts[4]) ? parts[4] : 'neutral',
+    age_bucket:        VALID_AGE.has(parts[5])    ? parts[5] : 'new',
   }
 }
 
@@ -23,9 +32,10 @@ function parseBucket(conditionBucket) {
 function buildUpsert(emaAlpha, promotionThreshold) {
   return `
   INSERT INTO pattern_library
-    (updated_at, volatility_bucket, regime, strategy, win_rate, mean_pnl_net, sample_count, active, wins, ema_win_rate)
-  VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
-  ON CONFLICT(volatility_bucket, regime, strategy) DO UPDATE SET
+    (updated_at, volatility_bucket, regime, strategy, fee_bucket, age_bucket,
+     win_rate, mean_pnl_net, sample_count, active, wins, ema_win_rate)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
+  ON CONFLICT(volatility_bucket, regime, strategy, fee_bucket, age_bucket) DO UPDATE SET
     updated_at   = excluded.updated_at,
     win_rate     = ((win_rate * sample_count) + excluded.win_rate)     / (sample_count + 1),
     mean_pnl_net = ((mean_pnl_net * sample_count) + excluded.mean_pnl_net) / (sample_count + 1),
@@ -61,20 +71,20 @@ function updatePattern(positionId, { netPnlPct, strategy, win, source, condition
     return
   }
 
-  const { volatility_bucket, regime } = parseBucket(bucket)
+  const { volatility_bucket, fee_bucket, regime, age_bucket } = parseBucket(bucket)
   const winVal = win ? 1.0 : 0.0
   const now    = new Date().toISOString()
 
   // Read config fresh so runtime changes to promotionThreshold / emaAlpha take effect
   // without restart. reconcile.js is the authoritative recompute; this is the fast cache.
   const L = getConfig().learning || {}
-  const emaAlpha         = L.emaAlpha         ?? 0.15
+  const emaAlpha           = L.emaAlpha           ?? 0.15
   const promotionThreshold = L.promotionThreshold ?? 45
 
   db.prepare(buildUpsert(emaAlpha, promotionThreshold))
-    .run(now, volatility_bucket, regime, strategy, winVal, netPnlPct, winVal, winVal)
+    .run(now, volatility_bucket, regime, strategy, fee_bucket, age_bucket, winVal, netPnlPct, winVal, winVal)
 
-  console.log(`[Pattern] ${volatility_bucket}×${regime}×${strategy}: win=${win ? '✓' : '✗'} pnl=${netPnlPct.toFixed(2)}%`)
+  console.log(`[Pattern] ${volatility_bucket}×${regime}×${fee_bucket}×${age_bucket}×${strategy}: win=${win ? '✓' : '✗'} pnl=${netPnlPct.toFixed(2)}%`)
 }
 
 function init() {
@@ -82,10 +92,10 @@ function init() {
     if (!payload?.position_id && !payload?.condition_bucket) return
     try {
       updatePattern(payload.position_id, {
-        netPnlPct:              payload.net_pnl_pct ?? 0,
-        strategy:               payload.strategy,
-        win:                    !!payload.win,
-        source:                 payload.source,
+        netPnlPct:               payload.net_pnl_pct ?? 0,
+        strategy:                payload.strategy,
+        win:                     !!payload.win,
+        source:                  payload.source,
         conditionBucketOverride: payload.condition_bucket ?? null,
       })
     } catch (e) {
