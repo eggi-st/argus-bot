@@ -3,6 +3,7 @@ const bus = require('../core/event-bus')
 const db = require('../db/database')
 const { recordDryRunPosition, closeDryRunPosition, recordTokenPrice } = require('../db/schema')
 const { getPoolSnapshot, getDexscreenerPrice } = require('./price-feed')
+const { confirmTechnique } = require('../intelligence/chart-indicators')
 
 // Range bins by strategy — how many bins wide a typical position is
 const RANGE_BINS_BY_STRATEGY = { spot: 69, bid_ask: 34, limit_order: 10 }
@@ -10,6 +11,10 @@ const RANGE_BINS_BY_STRATEGY = { spot: 69, bid_ask: 34, limit_order: 10 }
 const SNAPSHOT_TF_MINUTES = 30
 // In-range efficiency factor: fraction of hold time estimated to be in active range
 const IN_RANGE_FACTOR = 0.6
+
+// In-memory peak net PnL % per position (survives within a run; resets on restart — acceptable for dry-run).
+// Used by trailing take-profit: position must first reach trailingTriggerPct before the drop gate arms.
+const peakPnlTracker = new Map()
 
 /**
  * Conservative LP fee estimate in PERCENTAGE POINTS (same unit as gross_pnl_pct).
@@ -217,16 +222,62 @@ async function updateOpenPositions() {
       const slipCost       = (pos.simulated_slippage_pct ?? 0.3) * 2 * fillFraction
       const finalNetPnlPct = grossPnlPct + simulatedFeePct - slipCost
 
+      // ── Peak PnL tracking (trailing stop reference, Meridian-adapted) ────────
+      const trackedPeak = peakPnlTracker.get(pos.id) ?? finalNetPnlPct
+      const currentPeak = Math.max(trackedPeak, finalNetPnlPct)
+      peakPnlTracker.set(pos.id, currentPeak)
+
       // ── Outcome-driven exit decision (recorded as exit_technique) ─────────────
+      // Priority order (mirrors Meridian): hard limits → trailing TP → indicator signals → max_hold.
       // Acts on computed P&L, not raw price move — a price rise never "profits" a SOL bid below entry.
-      // Hold is decoupled from the short recommendation TTL: positions live until a real exit fires.
-      let closeReason = null, exitTechnique = null
-      if (finalNetPnlPct >= netTargetPct)    { closeReason = 'take_profit';  exitTechnique = 'net_target' }
-      else if (grossPnlPct <= -ilStopPct)    { closeReason = 'stop_loss';    exitTechnique = 'il_stop' }
-      else if (priceMovePct >= runUpExitPct) { closeReason = 'price_ran_up'; exitTechnique = 'price_ran_up' }
-      else if (holdMinutes >= maxHoldMins)   { closeReason = 'max_hold';     exitTechnique = 'max_hold' }
+      let closeReason = null, exitTechnique = null, indicatorSignal = null
+
+      // 1. Hard exits — fire regardless of anything else
+      if      (finalNetPnlPct >= netTargetPct)    { closeReason = 'take_profit';  exitTechnique = 'net_target' }
+      else if (grossPnlPct    <= -ilStopPct)      { closeReason = 'stop_loss';    exitTechnique = 'il_stop' }
+      else if (priceMovePct   >= runUpExitPct)    { closeReason = 'price_ran_up'; exitTechnique = 'price_ran_up' }
+
+      // 2. Trailing take-profit — arms once position reaches trailingTriggerPct, closes on pullback
+      const trailingTriggerPct = drCfg.trailingTriggerPct ?? 3.0  // arm when net PnL reaches +3%
+      const trailingDropPct    = drCfg.trailingDropPct    ?? 1.5  // close if drops ≥1.5pp from peak
+      if (!closeReason && currentPeak >= trailingTriggerPct) {
+        const dropFromPeak = currentPeak - finalNetPnlPct
+        if (dropFromPeak >= trailingDropPct) { closeReason = 'trailing_tp'; exitTechnique = 'trailing_tp' }
+      }
+
+      // 3. Indicator-based exit (RSI overbought / supertrend bearish / bollinger upper)
+      // Meridian reference: evaluatePreset('exit', exitPreset, payload). Fires pre-max_hold so
+      // the learning system can attribute exits to concrete signals rather than time-expiry.
+      // Strategy logic: bid_ask bids sit BELOW price; a bearish indicator means price will fall
+      // INTO our range (desirable) — so for bid_ask only check when IL is already accruing.
+      // For spot/limit_order: check when price has run up and fees are at risk of being erased by IL.
+      const indicatorsCfg = cfg.indicators || {}
+      const minHoldForIndicator = drCfg.minHoldBeforeIndicatorCheck ?? 20
+      if (!closeReason && indicatorsCfg.enabled && indicatorsCfg.exitPreset && holdMinutes >= minHoldForIndicator) {
+        const shouldCheck = pos.strategy === 'bid_ask'
+          ? priceMovePct < 0    // bid_ask: only exit on bearish signal when IL is actively accruing
+          : priceMovePct >= 0   // spot/LO: protect accrued fees before a price reversal causes IL
+        if (shouldCheck) {
+          const ivl = (Array.isArray(indicatorsCfg.intervals) && indicatorsCfg.intervals[0]) || '15_MINUTE'
+          try {
+            const result = await confirmTechnique(pos.token_mint, indicatorsCfg.exitPreset, 'exit', ivl)
+            if (!result.skipped && result.confirmed) {
+              closeReason = 'indicator_exit'
+              exitTechnique = result.technique
+              indicatorSignal = { preset: result.technique, reason: result.reason, author: result.author }
+            }
+          } catch (indErr) {
+            // indicators unavailable → hold; pattern-learning still records the unclosed position
+            console.warn(`[DryRun] #${pos.id} indicator check failed (hold): ${indErr.message}`)
+          }
+        }
+      }
+
+      // 4. Time-bound fallback — decoupled from recommendation TTL
+      if (!closeReason && holdMinutes >= maxHoldMins) { closeReason = 'max_hold'; exitTechnique = 'max_hold' }
 
       if (closeReason) {
+        peakPnlTracker.delete(pos.id)
         closeDryRunPosition(pos.id, {
           closed_at:          new Date().toISOString(),
           exit_price_sol:     currentPrice,
@@ -237,18 +288,22 @@ async function updateOpenPositions() {
           exit_technique:     exitTechnique,
           exit_metrics_json:  JSON.stringify({
             ...(exitSnapshot || {}),
-            price_move_pct: Math.round(priceMovePct * 100) / 100,
-            fill_fraction:  Math.round(fillFraction * 100) / 100,
-            slip_cost_pct:  Math.round(slipCost * 100) / 100,
+            price_move_pct: Math.round(priceMovePct  * 100) / 100,
+            fill_fraction:  Math.round(fillFraction  * 100) / 100,
+            slip_cost_pct:  Math.round(slipCost      * 100) / 100,
             range_pct:      rangeFraction,
+            peak_pnl_pct:   Math.round(currentPeak   * 100) / 100,
             model:          'single_sided_sol',
+            ...(indicatorSignal ? { indicator: indicatorSignal } : {}),
           }),
           simulated_fee_pct:  simulatedFeePct,
         })
 
         const dir = priceMovePct >= 0 ? '▲' : '▼'
         const feeStr = simulatedFeePct > 0 ? ` fee=+${simulatedFeePct.toFixed(2)}%` : ''
-        console.log(`[DryRun] Closed #${pos.id} ${pos.token_symbol} price${dir}${Math.abs(priceMovePct).toFixed(2)}% → pos=${grossPnlPct.toFixed(2)}% net=${finalNetPnlPct.toFixed(2)}%${feeStr} (${closeReason}, hold=${holdMinutes}m)`)
+        const peakStr = currentPeak > 0 ? ` peak=${currentPeak.toFixed(2)}%` : ''
+        const indStr = indicatorSignal ? ` [${indicatorSignal.preset}]` : ''
+        console.log(`[DryRun] Closed #${pos.id} ${pos.token_symbol} price${dir}${Math.abs(priceMovePct).toFixed(2)}% → pos=${grossPnlPct.toFixed(2)}% net=${finalNetPnlPct.toFixed(2)}%${feeStr}${peakStr} (${closeReason}${indStr}, hold=${holdMinutes}m)`)
 
         bus.emitSafe('outcome_recorded', {
           position_id:       pos.id,

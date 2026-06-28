@@ -97,6 +97,11 @@ const DEFAULTS = {
     enabled: true,
     limitOrderEntryPreset: 'bb_plus_rsi',        // primary gate for limit_order
     limitOrderShadowPreset: 'supertrend_or_rsi', // shadow-recorded for A/B (does not gate)
+    // Exit preset used by the dry-run engine's indicator-based exit (Phase 3 exit wiring).
+    // 'rsi_reversal' fires when RSI >= rsiOverbought — token extended, protecting accrued fees.
+    // Alternatives: 'supertrend_break' (bearish flip), 'bollinger_reversion' (price >= upperBand),
+    //               'rsi_plus_supertrend' (both confirmed), 'supertrend_or_rsi' (either).
+    exitPreset: 'rsi_reversal',
     intervals: ['15_MINUTE'],
     candles: 298,
     rsiLength: 2,
@@ -203,6 +208,15 @@ const DEFAULTS = {
     maxSimulatedFeePct: 3,    // cap fee credit (pp). Was 10 — single-sided LP rarely nets >3% in fees.
     feeCaptureHaircut: 0.5,   // fraction of the snapshot fee-rate actually captured over the hold
     inRangeFactor: 0.6,       // fraction of hold assumed in active range while earning fees
+    // ── Trailing take-profit (Meridian-adapted) ───────────────────────────
+    // Arms once net PnL reaches trailingTriggerPct; closes if it then drops trailingDropPct from peak.
+    // Rationale: protects accrued fee gains before a price reversal converts them to IL.
+    trailingTriggerPct: 3.0,  // arm at +3% net (achievable given fee cap of 3%)
+    trailingDropPct: 1.5,     // close if peak drops ≥ 1.5pp
+    // ── Indicator-based exit gate ─────────────────────────────────────────
+    // When indicators.enabled + exitPreset set, chart signals supplement the hard exits.
+    // Only checked after minHoldBeforeIndicatorCheck minutes to avoid early false positives.
+    minHoldBeforeIndicatorCheck: 20,  // min hold before indicators are consulted (minutes)
   },
   wallet: {
     // Set your Solana wallet address in user-config.json to enable observation.
