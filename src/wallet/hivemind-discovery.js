@@ -111,13 +111,16 @@ function upsertWallets(candidates, source) {
 
     const existing = db.prepare('SELECT id, pool_hits FROM tracked_wallets WHERE address = ?').get(addr)
     if (existing) {
+      // Re-discovery resets lifecycle to active (wallet is still out there)
       db.prepare(`
-        UPDATE tracked_wallets SET pool_hits = MAX(pool_hits, ?), last_seen = ? WHERE address = ?
+        UPDATE tracked_wallets
+        SET pool_hits = MAX(pool_hits, ?), last_seen = ?, lifecycle_state = 'active', active = 1
+        WHERE address = ?
       `).run(c.pool_hits || 1, now, addr)
     } else {
       db.prepare(`
-        INSERT INTO tracked_wallets (discovered_at, address, label, source, active, pool_hits, last_seen)
-        VALUES (?, ?, ?, ?, 1, ?, ?)
+        INSERT INTO tracked_wallets (discovered_at, address, label, source, active, lifecycle_state, pool_hits, last_seen)
+        VALUES (?, ?, ?, ?, 1, 'active', ?, ?)
       `).run(now, addr, c.label || addr.slice(0, 8), source, c.pool_hits || 1, now)
       added++
     }
@@ -261,8 +264,11 @@ function getStatus() {
 
 function getTrackedWallets() {
   return db.prepare(`
-    SELECT address, label, source, pool_hits, discovered_at, last_seen, active
-    FROM tracked_wallets ORDER BY pool_hits DESC, discovered_at DESC
+    SELECT address, label, source, pool_hits, discovered_at, last_seen, active,
+           COALESCE(lifecycle_state, 'active') AS lifecycle_state,
+           COALESCE(quality_score, 0.5)        AS quality_score
+    FROM tracked_wallets
+    ORDER BY COALESCE(quality_score, 0.5) DESC, pool_hits DESC, discovered_at DESC
   `).all()
 }
 

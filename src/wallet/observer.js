@@ -74,7 +74,20 @@ async function pollWallet(wallet, rpcUrl) {
     }
   }
 
-  if (found) console.log(`[Wallet] ${wallet.label}: ${found} Meteora action(s) recorded`)
+  if (found) {
+    console.log(`[Wallet] ${wallet.label}: ${found} Meteora action(s) recorded`)
+    // Activity signal: this wallet is still alive — reset lifecycle to 'active'.
+    if (wallet.type === 'smart_money') {
+      try {
+        const db = require('../db/database')
+        db.prepare(`
+          UPDATE tracked_wallets
+          SET last_seen = ?, lifecycle_state = 'active', active = 1
+          WHERE address = ?
+        `).run(new Date().toISOString(), wallet.address)
+      } catch { /* non-critical */ }
+    }
+  }
 }
 
 /**

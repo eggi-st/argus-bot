@@ -130,6 +130,21 @@ const DEFAULTS = {
     // gate from starving new dimensions of data they need to get promoted.
     explorationQuota: { enabled: true },
   },
+  wallet: {
+    // Lifecycle state machine for tracked smart-money wallets.
+    // Transitions are driven by last_seen staleness (updated by hivemind re-discovery
+    // OR by a real on-chain wallet_action detected by the observer).
+    //   active    → seen within coolingDays
+    //   cooling   → inactive coolingDays–staleDays (still observed, grace period)
+    //   stale     → inactive staleDays–retiredDays (still observed, low priority)
+    //   retired   → inactive retiredDays+ (removed from observer, active=0)
+    lifecycle: {
+      coolingDays:  3,           // active → cooling after this many days without activity
+      staleDays:    7,           // cooling → stale
+      retiredDays:  14,          // stale → retired (ejected from observer)
+      cron:         '0 6 * * *', // daily at 06:00 UTC
+    },
+  },
   learning: {
     // Pattern confidence gate — blocks (strategy × condition) combos with no proven edge.
     // Only applies once a pattern is ACTIVE (promoted at promotionThreshold samples).

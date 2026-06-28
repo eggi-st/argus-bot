@@ -73,6 +73,11 @@ async function init() {
   hivemind.init()
   console.log('✓')
 
+  process.stdout.write('[Init] Layer 4 · Wallet Lifecycle... ')
+  const walletLifecycle = require('../wallet/lifecycle')
+  walletLifecycle.init()
+  console.log('✓')
+
   // ── Layer 5: Notifications + Web Server ──────────────────────────────────
   process.stdout.write('[Init] Layer 5 · Telegram... ')
   const telegram = require('../notifications/telegram')

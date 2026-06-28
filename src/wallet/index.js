@@ -8,12 +8,18 @@ let _rpcUrl = null
 function loadDbWallets() {
   try {
     const db = require('../db/database')
+    // Exclude retired wallets (inactive 14+d). cooling/stale are still worth watching.
     return db.prepare(`
-      SELECT address, label FROM tracked_wallets WHERE active = 1
+      SELECT address, label, COALESCE(lifecycle_state, 'active') AS lifecycle_state,
+             COALESCE(quality_score, 0.5) AS quality_score
+      FROM tracked_wallets
+      WHERE COALESCE(lifecycle_state, 'active') != 'retired'
     `).all().map(row => ({
-      address: row.address,
-      label:   row.label || row.address.slice(0, 8),
-      type:    'smart_money',
+      address:        row.address,
+      label:          row.label || row.address.slice(0, 8),
+      type:           'smart_money',
+      lifecycleState: row.lifecycle_state,
+      qualityScore:   row.quality_score,
     }))
   } catch { return [] }
 }

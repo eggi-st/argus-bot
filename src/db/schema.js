@@ -194,6 +194,11 @@ function migrateSchema() {
     // even when win_rate looks acceptable. Computed by reconcile.js (authoritative path).
     `ALTER TABLE pattern_library ADD COLUMN avg_win_pnl REAL`,
     `ALTER TABLE pattern_library ADD COLUMN avg_loss_pnl REAL`,
+    // Wallet lifecycle (2026-06-29): state machine (active→cooling→stale→retired) driven by
+    // last_seen staleness + wallet_actions activity. quality_score reflects how often this
+    // wallet's LP entries correlated with profitable Argus outcomes. Default 0.5 = neutral.
+    `ALTER TABLE tracked_wallets ADD COLUMN lifecycle_state TEXT DEFAULT 'active'`,
+    `ALTER TABLE tracked_wallets ADD COLUMN quality_score REAL DEFAULT 0.5`,
   ]
   let added = 0
   for (const sql of cols) {

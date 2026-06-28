@@ -83,6 +83,12 @@ function start() {
     })
   }
 
+  // ── Wallet lifecycle: state transitions + quality scoring ─────────────────
+  const walletCfg = require('../config').getConfig().wallet || {}
+  schedule('wallet-lifecycle', walletCfg.lifecycle?.cron || '0 6 * * *', () => {
+    bus.emitSafe('wallet_lifecycle_check', { ts: Date.now() })
+  })
+
   console.log(`[Scheduler] ${jobs.size} jobs scheduled`)
 }
 
