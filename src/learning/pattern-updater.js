@@ -3,12 +3,6 @@ const bus = require('../core/event-bus')
 const db  = require('../db/database')
 const { getConfig } = require('../config')
 
-// Read promotion threshold + EMA alpha once at module load (the UPSERT is a fast cache;
-// the reconciliation job — reconcile.js — is the authoritative, config-fresh recomputation).
-const _L = getConfig().learning || {}
-const PROMOTION_THRESHOLD = _L.promotionThreshold ?? 60  // samples required to activate a pattern
-const EMA_ALPHA = _L.emaAlpha ?? 0.15
-
 /**
  * Parse conditionBucket string (e.g. "low_vol_medium_yield_neutral")
  * into the two dimensions used by pattern_library.
@@ -23,7 +17,11 @@ function parseBucket(conditionBucket) {
   }
 }
 
-const UPSERT = `
+// Build the UPSERT SQL fresh per call so emaAlpha and promotionThreshold always reflect
+// the current runtime config. better-sqlite3 caches by SQL string, so identical config
+// between calls reuses the compiled statement. Called at most once per closed outcome event.
+function buildUpsert(emaAlpha, promotionThreshold) {
+  return `
   INSERT INTO pattern_library
     (updated_at, volatility_bucket, regime, strategy, win_rate, mean_pnl_net, sample_count, active, wins, ema_win_rate)
   VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
@@ -33,9 +31,10 @@ const UPSERT = `
     mean_pnl_net = ((mean_pnl_net * sample_count) + excluded.mean_pnl_net) / (sample_count + 1),
     sample_count = sample_count + 1,
     wins         = COALESCE(wins, 0) + excluded.wins,
-    ema_win_rate = ${EMA_ALPHA} * excluded.win_rate + (1 - ${EMA_ALPHA}) * COALESCE(ema_win_rate, excluded.win_rate),
-    active       = CASE WHEN sample_count + 1 >= ${PROMOTION_THRESHOLD} THEN 1 ELSE active END
+    ema_win_rate = ${emaAlpha} * excluded.win_rate + (1 - ${emaAlpha}) * COALESCE(ema_win_rate, excluded.win_rate),
+    active       = CASE WHEN sample_count + 1 >= ${promotionThreshold} THEN 1 ELSE active END
 `
+}
 
 function resolveConditionBucket(positionId, source, conditionBucketOverride) {
   if (conditionBucketOverride) return conditionBucketOverride
@@ -57,17 +56,24 @@ function resolveConditionBucket(positionId, source, conditionBucketOverride) {
 function updatePattern(positionId, { netPnlPct, strategy, win, source, conditionBucketOverride }) {
   const bucket = resolveConditionBucket(positionId, source, conditionBucketOverride)
   if (!bucket) return
+  if (!Number.isFinite(netPnlPct)) {
+    console.warn('[Pattern] Invalid netPnlPct — skipping pattern update')
+    return
+  }
 
   const { volatility_bucket, regime } = parseBucket(bucket)
   const winVal = win ? 1.0 : 0.0
   const now    = new Date().toISOString()
 
-  db.prepare(UPSERT).run(now, volatility_bucket, regime, strategy, winVal, netPnlPct, winVal, winVal)
+  // Read config fresh so runtime changes to promotionThreshold / emaAlpha take effect
+  // without restart. reconcile.js is the authoritative recompute; this is the fast cache.
+  const L = getConfig().learning || {}
+  const emaAlpha         = L.emaAlpha         ?? 0.15
+  const promotionThreshold = L.promotionThreshold ?? 45
 
-  if (!Number.isFinite(netPnlPct)) {
-    console.warn('[Pattern] Invalid netPnlPct — skipping pattern update')
-    return
-  }
+  db.prepare(buildUpsert(emaAlpha, promotionThreshold))
+    .run(now, volatility_bucket, regime, strategy, winVal, netPnlPct, winVal, winVal)
+
   console.log(`[Pattern] ${volatility_bucket}×${regime}×${strategy}: win=${win ? '✓' : '✗'} pnl=${netPnlPct.toFixed(2)}%`)
 }
 

@@ -71,7 +71,9 @@ function reconcilePatterns() {
       const win_rate = chosen.n > 0 ? chosen.wins / chosen.n : 0
       // Only REAL-backed patterns are promoted to 'active' (drives confidence). Sim-only
       // patterns stay inactive → adjustScore treats them as neutral (no confidence boost).
-      const active = (useReal && real.n >= Math.min(threshold, minRealSamples)) ? 1 : 0
+      // useReal already requires real.n >= minRealSamples; promotion needs real.n >= threshold.
+      // Was: Math.min(threshold, minRealSamples) = Math.min(45, 20) = 20 → threshold ignored.
+      const active = (useReal && real.n >= threshold) ? 1 : 0
       if (useReal) realCount++; else simCount++
       const reality_gap = (realWr != null && simWr != null) ? (realWr - simWr) : null
 

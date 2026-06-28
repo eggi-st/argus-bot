@@ -177,4 +177,25 @@ async function enrichWithIndicators(candidates, cfg) {
   }))
 }
 
-module.exports = { evaluatePreset, signalScore, confirmTechnique, enrichWithIndicators, buildSignalSummary }
+/**
+ * Enrich spot candidates with an optional entry indicator (parallel, non-blocking).
+ * Attaches pool.entry_indicator — confirmed=true gives a small confidence boost in processPool.
+ * No-op when indicators disabled or spotEntryPreset not set. Failures → skipped=true (no block).
+ *
+ * Rationale: entering spot LP at a local RSI dip or bollinger touch reduces immediate-reversal IL
+ * risk. This does NOT hard-gate spot (unlike LO's bb_plus_rsi) — only boosts confidence slightly.
+ */
+async function enrichSpotIndicators(candidates, cfg) {
+  const icfg = cfg.indicators || {}
+  if (!icfg.enabled || !icfg.spotEntryPreset || !Array.isArray(candidates) || !candidates.length) return
+  const preset   = icfg.spotEntryPreset
+  const interval = (Array.isArray(icfg.intervals) && icfg.intervals[0]) || '15_MINUTE'
+  await Promise.allSettled(candidates.map(async (pool) => {
+    const mint = pool.base?.mint
+    if (!mint) return
+    pool.entry_indicator = await confirmTechnique(mint, preset, 'entry', interval)
+      .catch(() => ({ confirmed: false, skipped: true, technique: preset, reason: 'fetch failed' }))
+  }))
+}
+
+module.exports = { evaluatePreset, signalScore, confirmTechnique, enrichWithIndicators, enrichSpotIndicators, buildSignalSummary }

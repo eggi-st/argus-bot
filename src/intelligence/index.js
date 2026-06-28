@@ -4,7 +4,7 @@ const riskState = require('../core/risk-state')
 const { recordDecision } = require('../db/schema')
 const { getTopCandidates } = require('./screener')
 const { scoreStrategies } = require('./strategy-router')
-const { enrichWithIndicators } = require('./chart-indicators')
+const { enrichWithIndicators, enrichSpotIndicators } = require('./chart-indicators')
 const { techniqueAuthor } = require('./techniques')
 const { getConfig } = require('../config')
 const { parseBucket }      = require('../learning/pattern-updater')
@@ -193,6 +193,14 @@ function processPool(pool, cfg, forceStrategy) {
     console.warn('[IC] Smart money check failed:', e.message)
   }
 
+  // Soft indicator boost for spot (non-blocking — attribution + small confidence lift).
+  // For limit_order, the lo_indicator gate is applied in the strategy router instead.
+  if (pool.entry_indicator && !pool.entry_indicator.skipped && pool.entry_indicator.confirmed) {
+    confidence = Math.min(1, confidence * 1.10)
+    pool.entry_technique = pool.entry_indicator.technique
+    console.log(`[IC] Entry indicator confirmed (${pool.entry_indicator.technique}): ${pool.base?.symbol} → conf boosted to ${(confidence * 100).toFixed(0)}%`)
+  }
+
   const indicators = {
     volatility: pool.volatility,
     fee_active_tvl_ratio: pool.fee_active_tvl_ratio,
@@ -223,11 +231,12 @@ function processPool(pool, cfg, forceStrategy) {
     condition_bucket: bucket,
     primary_technique: primaryTechnique,
     author: techAuthor,
-    confirmations: pool.lo_indicator ? [{
-      technique: pool.lo_indicator.technique, author: pool.lo_indicator.author,
-      confirmed: pool.lo_indicator.confirmed, reason: pool.lo_indicator.reason,
-      skipped: pool.lo_indicator.skipped || false,
-    }] : [],
+    confirmations: [
+      ...(pool.lo_indicator ? [{ technique: pool.lo_indicator.technique, author: pool.lo_indicator.author,
+        confirmed: pool.lo_indicator.confirmed, reason: pool.lo_indicator.reason, skipped: pool.lo_indicator.skipped || false }] : []),
+      ...(pool.entry_indicator ? [{ technique: pool.entry_indicator.technique, author: pool.entry_indicator.author,
+        confirmed: pool.entry_indicator.confirmed, reason: pool.entry_indicator.reason, skipped: pool.entry_indicator.skipped || false }] : []),
+    ],
     shadow: pool.lo_shadow ? {
       technique: pool.lo_shadow.technique, confirmed: pool.lo_shadow.confirmed,
       reason: pool.lo_shadow.reason, skipped: pool.lo_shadow.skipped || false,
@@ -361,6 +370,12 @@ async function runScan() {
       if (pipe.strategy === 'limit_order') {
         try { await enrichWithIndicators(res.candidates, cfg) }
         catch (e) { console.warn('[IC] indicator enrich failed:', e.message) }
+      }
+      // Phase 3+: soft entry indicator for spot (non-blocking — boosts confidence if confirmed).
+      // bid_ask skipped: SOL bids benefit from overbought entries (price likely to fall toward bid).
+      if (pipe.strategy === 'spot') {
+        try { await enrichSpotIndicators(res.candidates, cfg) }
+        catch (e) { console.warn('[IC] spot indicator enrich failed:', e.message) }
       }
 
       for (const pool of res.candidates) {

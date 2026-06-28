@@ -97,6 +97,10 @@ const DEFAULTS = {
     enabled: true,
     limitOrderEntryPreset: 'bb_plus_rsi',        // primary gate for limit_order
     limitOrderShadowPreset: 'supertrend_or_rsi', // shadow-recorded for A/B (does not gate)
+    // Entry preset for spot pipeline (soft boost, not hard gate — unlike LO's bb_plus_rsi).
+    // 'rsi_reversal' fires when RSI <= rsiOversold (entering at a local dip reduces IL risk).
+    // Set to null to disable spot indicator enrichment.
+    spotEntryPreset: 'rsi_reversal',
     // Exit preset used by the dry-run engine's indicator-based exit (Phase 3 exit wiring).
     // 'rsi_reversal' fires when RSI >= rsiOverbought — token extended, protecting accrued fees.
     // Alternatives: 'supertrend_break' (bearish flip), 'bollinger_reversion' (price >= upperBand),
