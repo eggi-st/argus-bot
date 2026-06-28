@@ -130,10 +130,15 @@ const DEFAULTS = {
     // Only applies once a pattern is ACTIVE (promoted at promotionThreshold samples).
     confidenceGate: {
       enabled: true,
-      minWinRate: 0.35,     // require Wilson lower-bound of win_rate >= this
-      minMeanPnl: -1.0,     // block if avg net P&L below this (%)
-      minConfidence: 0.15,  // hard floor on blended confidence
-      wilsonZ: 1.0,         // 1.0 ≈ one std-error lower bound; raise to 1.96 for stricter 95%
+      minWinRate: 0.35,      // require Wilson lower-bound of win_rate >= this
+      minMeanPnl: -1.0,      // block if avg net P&L below this (%)
+      minConfidence: 0.15,   // hard floor on blended confidence
+      wilsonZ: 1.0,          // 1.0 ≈ one std-error lower bound; raise to 1.96 for stricter 95%
+      // Payoff ratio gate: avg_win_pnl / |avg_loss_pnl| must be >= this.
+      // Blocks patterns where losses dwarf wins even if win_rate looks acceptable.
+      // 0.5 = lenient (avg win must be at least half the avg loss). Raise to 1.0 to require
+      // break-even risk/reward, or 1.5 for a classic 1:1.5 minimum edge.
+      minPayoffRatio: 0.5,
     },
     // Phase 3a — scoring blend. Confidence = rawScore blended with a shrinkage-damped,
     // EMA-weighted historical win rate; shrinks toward the per-strategy base rate (NOT 0.5)

@@ -3,7 +3,8 @@ const db = require('../db/database')
 
 function getPattern(volatilityBucket, regime, strategy) {
   return db.prepare(`
-    SELECT win_rate, mean_pnl_net, sample_count, active, wins, ema_win_rate, source
+    SELECT win_rate, mean_pnl_net, sample_count, active, wins, ema_win_rate, source,
+           avg_win_pnl, avg_loss_pnl
     FROM pattern_library
     WHERE volatility_bucket = ? AND regime = ? AND strategy = ?
     LIMIT 1
@@ -51,8 +52,22 @@ function adjustScore(rawScore, pattern, cfg, strategy) {
   const ema = pattern.ema_win_rate != null ? pattern.ema_win_rate : (pattern.win_rate ?? 0.5)
   const r0 = getBaseRate(strategy, cfg)
   const denom = N + k
-  const pScore = denom > 0 ? (N / denom) * ema + (k / denom) * r0 : r0
-  const adjusted = rawScore * (1 - w) + pScore * w
+  // Win-rate shrinkage (unchanged): shrinks toward per-strategy base rate on thin data.
+  const wrScore = denom > 0 ? (N / denom) * ema + (k / denom) * r0 : r0
+
+  // Payoff quality term: payoff_ratio = avg_win / |avg_loss|.
+  // Normalize via ratio/(ratio+1) → [0,1]: ratio=1 maps to 0.5 (neutral), >1 is better.
+  // Falls back to 0.5 (neutral) when data is missing so thin patterns are never penalised.
+  let payoffNorm = 0.5
+  if (pattern.avg_win_pnl != null && pattern.avg_loss_pnl != null && pattern.avg_loss_pnl < 0) {
+    const ratio = pattern.avg_win_pnl / Math.abs(pattern.avg_loss_pnl)
+    payoffNorm = Math.min(1, Math.max(0, ratio / (ratio + 1)))
+  }
+
+  // Historical score = 70% win-rate momentum + 30% payoff quality.
+  // This makes the confidence directly sensitive to risk/reward, not just frequency of wins.
+  const historicalScore = 0.7 * wrScore + 0.3 * payoffNorm
+  const adjusted = rawScore * (1 - w) + historicalScore * w
   return Math.min(1, Math.max(0, adjusted))
 }
 

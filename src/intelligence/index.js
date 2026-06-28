@@ -49,6 +49,7 @@ function checkPatternGate(pattern, confidence, gateCfg = {}) {
   const minWinRate    = gateCfg.minWinRate    ?? 0.35
   const minMeanPnl    = gateCfg.minMeanPnl    ?? -1.0
   const minConfidence = gateCfg.minConfidence ?? 0.15
+  const minPayoffRatio = gateCfg.minPayoffRatio ?? 0.5   // avg_win must be >= 0.5× avg_loss
   const wilsonZ       = gateCfg.wilsonZ       ?? 1.0
 
   if (confidence < minConfidence) {
@@ -63,6 +64,15 @@ function checkPatternGate(pattern, confidence, gateCfg = {}) {
   }
   if (pattern.mean_pnl_net != null && pattern.mean_pnl_net < minMeanPnl) {
     return { blocked: true, reason: `mean P&L ${pattern.mean_pnl_net.toFixed(1)}% < min ${minMeanPnl}% (N=${pattern.sample_count})` }
+  }
+  // Payoff ratio gate: avg_win / |avg_loss| must meet a minimum threshold.
+  // Catches strategies with deceptively-high win rates where losses dwarf wins
+  // (e.g. WR=65%, avg_win=+0.4%, avg_loss=−8% → EV negative despite "decent" WR).
+  if (pattern.avg_win_pnl != null && pattern.avg_loss_pnl != null && pattern.avg_loss_pnl < 0) {
+    const ratio = pattern.avg_win_pnl / Math.abs(pattern.avg_loss_pnl)
+    if (ratio < minPayoffRatio) {
+      return { blocked: true, reason: `payoff ${ratio.toFixed(2)}× < min ${minPayoffRatio}× (avg win +${pattern.avg_win_pnl.toFixed(1)}% / avg loss ${pattern.avg_loss_pnl.toFixed(1)}%)` }
+    }
   }
   return { blocked: false }
 }

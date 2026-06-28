@@ -189,6 +189,11 @@ function migrateSchema() {
     // Dry-run: record which technique opened/closed the position (replaces blind ttl_expired).
     `ALTER TABLE dry_run_positions ADD COLUMN entry_technique TEXT`,
     `ALTER TABLE dry_run_positions ADD COLUMN exit_technique TEXT`,
+    // EV scoring (2026-06-29): track avg PnL split by wins vs losses — payoff ratio =
+    // avg_win_pnl / |avg_loss_pnl|. Allows gate to block negative risk/reward patterns
+    // even when win_rate looks acceptable. Computed by reconcile.js (authoritative path).
+    `ALTER TABLE pattern_library ADD COLUMN avg_win_pnl REAL`,
+    `ALTER TABLE pattern_library ADD COLUMN avg_loss_pnl REAL`,
   ]
   let added = 0
   for (const sql of cols) {
@@ -513,9 +518,11 @@ function recordPatternReconciled(vb, regime, strategy, d) {
   return getStmt('reconcilePattern', `
     INSERT INTO pattern_library
       (updated_at, volatility_bucket, regime, strategy, win_rate, mean_pnl_net, sample_count, active, wins, last_reconciled_at,
-       source, live_win_rate, live_mean_pnl, live_sample_count, sim_win_rate, sim_sample_count, reality_gap)
+       source, live_win_rate, live_mean_pnl, live_sample_count, sim_win_rate, sim_sample_count, reality_gap,
+       avg_win_pnl, avg_loss_pnl)
     VALUES (@updated_at, @vb, @regime, @strategy, @win_rate, @mean_pnl_net, @sample_count, @active, @wins, @last_reconciled_at,
-       @source, @live_win_rate, @live_mean_pnl, @live_sample_count, @sim_win_rate, @sim_sample_count, @reality_gap)
+       @source, @live_win_rate, @live_mean_pnl, @live_sample_count, @sim_win_rate, @sim_sample_count, @reality_gap,
+       @avg_win_pnl, @avg_loss_pnl)
     ON CONFLICT(volatility_bucket, regime, strategy) DO UPDATE SET
       updated_at         = excluded.updated_at,
       win_rate           = excluded.win_rate,
@@ -530,10 +537,13 @@ function recordPatternReconciled(vb, regime, strategy, d) {
       live_sample_count  = excluded.live_sample_count,
       sim_win_rate       = excluded.sim_win_rate,
       sim_sample_count   = excluded.sim_sample_count,
-      reality_gap        = excluded.reality_gap
+      reality_gap        = excluded.reality_gap,
+      avg_win_pnl        = excluded.avg_win_pnl,
+      avg_loss_pnl       = excluded.avg_loss_pnl
   `).run({ vb, regime, strategy,
     source: null, live_win_rate: null, live_mean_pnl: null, live_sample_count: 0,
-    sim_win_rate: null, sim_sample_count: 0, reality_gap: null, ...d })
+    sim_win_rate: null, sim_sample_count: 0, reality_gap: null,
+    avg_win_pnl: null, avg_loss_pnl: null, ...d })
 }
 
 /**
