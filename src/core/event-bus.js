@@ -32,6 +32,7 @@ const SLOW_EVENTS = new Set([
   'tuner_cycle',             // Auto-tuner evaluation tick
   'tuning_proposal',         // Auto-tuner proposed a bounded delta (shadow)
   'tuning_applied',          // Auto-tuner / operator applied a tuning delta
+  'wallet_lifecycle_check',  // Daily wallet state-machine + quality scoring cycle
 ])
 
 const ALL_EVENTS = new Set([...FAST_EVENTS, ...SLOW_EVENTS])
