@@ -161,10 +161,8 @@
 const PIPELINE_NAMES = { bid_ask: 'Bid / Ask', spot: 'Spot', limit_order: 'Limit Order', unknown: 'Unknown' }
 const STAGE_NAMES    = { screener: 'Screener filters', enrichment: 'Post-enrichment', pattern: 'Pattern gate' }
 
-// Auth: prefer token from URL param (set when navigating from dashboard), fall back to sessionStorage
-const _urlToken = new URLSearchParams(location.search).get('token')
-let TOKEN = _urlToken || sessionStorage.getItem('argus_token')
-if (_urlToken) sessionStorage.setItem('argus_token', _urlToken)
+// Auth: read token from sessionStorage (set by index.html on login — same origin)
+let TOKEN = sessionStorage.getItem('argus_token')
 
 function apiFetch(url, opts = {}) {
   const headers = { ...(opts.headers || {}) }
