@@ -69,6 +69,11 @@ app.use(express.json())
 app.use(rateLimiter)
 app.use(express.static(path.join(__dirname, '../public')))
 
+// Diagnostics page — auth-gated, served from views/ (not public/)
+app.get('/diagnostics', authMiddleware, (req, res) => {
+  res.sendFile(path.join(__dirname, '../views/diagnostics.html'))
+})
+
 // ── API Routes ────────────────────────────────────────────────────────────────
 
 const { version } = require('../package.json')

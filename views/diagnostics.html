@@ -161,11 +161,22 @@
 const PIPELINE_NAMES = { bid_ask: 'Bid / Ask', spot: 'Spot', limit_order: 'Limit Order', unknown: 'Unknown' }
 const STAGE_NAMES    = { screener: 'Screener filters', enrichment: 'Post-enrichment', pattern: 'Pattern gate' }
 
+// Auth: prefer token from URL param (set when navigating from dashboard), fall back to sessionStorage
+const _urlToken = new URLSearchParams(location.search).get('token')
+let TOKEN = _urlToken || sessionStorage.getItem('argus_token')
+if (_urlToken) sessionStorage.setItem('argus_token', _urlToken)
+
+function apiFetch(url, opts = {}) {
+  const headers = { ...(opts.headers || {}) }
+  if (TOKEN) headers['x-auth-token'] = TOKEN
+  return fetch(url, { ...opts, headers })
+}
+
 async function loadFunnel() {
   const hours = document.getElementById('windowSelect').value
   document.getElementById('funnelGrid').innerHTML = '<div class="spinner"></div>'
   try {
-    const data = await (await fetch(`/api/screening-funnel?hours=${hours}`)).json()
+    const data = await (await apiFetch(`/api/screening-funnel?hours=${hours}`)).json()
     if (data.error) throw new Error(data.error)
     renderFunnel(data)
     document.getElementById('funnelTs').textContent = 'Updated ' + new Date().toLocaleTimeString()
@@ -238,7 +249,7 @@ function renderFunnel(data) {
 async function loadConfig() {
   document.getElementById('configContainer').innerHTML = '<div class="spinner"></div>'
   try {
-    const data = await (await fetch('/api/config/effective')).json()
+    const data = await (await apiFetch('/api/config/effective')).json()
     if (data.error) throw new Error(data.error)
     renderConfig(data)
   } catch (e) {
