@@ -49,6 +49,19 @@ const DEFAULTS = {
     // profile (fresh high-vol memes). Each profile shallow-overrides the base so a dedicated
     // pipeline can target a different universe and let that strategy accumulate samples.
     profiles: {
+      bid_ask: {
+        // High-vol meme universe. The base config has maxTokenAgeHours:72 + antirug:48h,
+        // leaving only a 24h window (48–72h) — far too narrow to find candidates consistently.
+        // Fix: no upper age cap (volatility is the primary filter) + loosen antirug to 24h
+        // (bid_ask is inherently tail-safe: SOL bids sit BELOW price, so younger/riskier
+        // tokens are less catastrophic than a same-side spot deployment would be).
+        maxTokenAgeHours: null,
+        antirug: {
+          enabled: true,
+          minTokenAgeHours: 24,   // loosened from 48 — bid_ask's below-price bids absorb tail risk
+          maxTvlMcapRatio: 0.10,
+        },
+      },
       spot: {
         // NOTE: maxVolatility is NOT set here — it derives from strategy.spotMaxVolatility
         // (single source of truth) via resolveScreening(), so one knob drives both the spot
