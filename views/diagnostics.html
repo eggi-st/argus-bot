@@ -4,45 +4,49 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Argus · Diagnostics</title>
+  <meta name="theme-color" content="#030712"/>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico"/>
   <style>
-    :root {
-      --bg:      #030712;
-      --bg2:     #111827;
-      --bg3:     #1f2937;
-      --border:  #1f2937;
-      --border2: #374151;
-      --text:    #f1f5f9;
-      --muted:   #6b7280;
-      --muted2:  #4b5563;
-      --green:   #22c55e;
-      --red:     #ef4444;
-      --yellow:  #eab308;
-      --blue:    #3b82f6;
-      --indigo:  #6366f1;
-    }
+    /* ── Palette ── */
+    :root{--bg:#030712;--bg2:#111827;--bg3:#1f2937;--border:#1f2937;--border2:#374151;--text:#f1f5f9;--muted:#6b7280;--muted2:#4b5563;--green:#22c55e;--red:#ef4444;--yellow:#eab308;--blue:#3b82f6;--indigo:#6366f1}
     *{box-sizing:border-box;margin:0;padding:0}
     ::-webkit-scrollbar{width:4px;height:4px}
     ::-webkit-scrollbar-track{background:transparent}
     ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
-    body{background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Courier New",monospace;font-size:13px;line-height:1.5;min-height:100vh}
+    html,body{overflow-x:clip}
+    body{background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Courier New",monospace;font-size:13px;line-height:1.5;overscroll-behavior:none}
+
+    /* ── Sidebar (identical to index.html) ── */
+    #sidebar{position:fixed;left:0;top:0;height:100%;width:64px;background:#0d1117;border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:14px 0 18px;gap:1px;z-index:50}
+    #sidebar img{width:32px;height:32px;object-fit:contain;margin-bottom:14px}
+    nav{display:flex;flex-direction:column;gap:2px;width:100%;padding:0 8px}
+    .nav-btn{display:flex;align-items:center;justify-content:center;width:100%;padding:10px 0;border-radius:8px;color:var(--muted);border:none;background:transparent;cursor:pointer;transition:all .15s;position:relative;text-decoration:none}
+    .nav-btn:hover{background:var(--bg3);color:#e5e7eb}
+    .nav-btn.active{background:#1e1b4b;color:#818cf8}
+    .nav-btn svg{width:20px;height:20px;flex-shrink:0}
+    .tip{display:none;position:absolute;left:110%;top:50%;transform:translateY(-50%);background:var(--bg3);border:1px solid var(--border2);color:#e5e7eb;font-size:11px;padding:4px 8px;border-radius:6px;white-space:nowrap;z-index:100;pointer-events:none}
+    .nav-btn:hover .tip{display:block}
 
     /* ── Header ── */
-    .header{display:flex;align-items:center;gap:14px;padding:16px 24px;border-bottom:1px solid var(--border);background:#0d1117;position:sticky;top:0;z-index:10}
-    .header-back{color:var(--muted);text-decoration:none;font-size:12px;display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:6px;border:1px solid var(--border2);transition:all .15s}
-    .header-back:hover{color:var(--text);border-color:var(--muted)}
-    .header-title{font-size:15px;font-weight:600;color:var(--text)}
-    .header-sub{font-size:11px;color:var(--muted);margin-left:auto}
-    .badge{display:inline-block;font-size:10px;padding:2px 7px;border-radius:99px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
-    .badge-readonly{background:#1e1b4b;color:#818cf8;border:1px solid #3730a3}
+    header{position:fixed;top:0;left:64px;right:0;height:52px;background:#0d1117;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 24px;gap:16px;z-index:40}
+    header h1{font-size:13px;font-weight:700;letter-spacing:3px;color:var(--text)}
+    header h1 .hdr-page{color:#9ca3af;font-weight:500;letter-spacing:.6px;margin-left:8px;font-size:12px}
+    header h1 .ver{color:var(--muted2);font-weight:400;letter-spacing:1px;margin-left:8px;font-size:10px}
+    .hdr-right{display:flex;align-items:center;gap:8px;margin-left:auto;font-size:11px;color:var(--muted)}
+    .badge-readonly{background:#1e1b4b;color:#818cf8;border:1px solid #3730a3;font-size:10px;padding:2px 8px;border-radius:99px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+    #hdr-ts{color:var(--muted2);font-variant-numeric:tabular-nums;font-size:11px}
 
-    /* ── Layout ── */
-    .content{max-width:1100px;margin:0 auto;padding:24px}
+    /* ── Main ── */
+    #main{margin-left:64px;margin-top:52px;min-height:calc(100vh - 52px);padding:24px}
+    .inner{max-width:1100px;margin:0 auto}
+
+    /* ── Section ── */
     .section{margin-bottom:32px}
     .section-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px;display:flex;align-items:center;gap:8px}
     .section-title span{flex:1;height:1px;background:var(--border)}
     .grid-3{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
 
-    /* ── Pipeline Card ── */
+    /* ── Pipeline cards ── */
     .pipe-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden}
     .pipe-card-head{padding:12px 16px;background:var(--bg3);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
     .pipe-label{font-size:13px;font-weight:600}
@@ -51,8 +55,6 @@
     .pipe-label.limit_order{color:var(--blue)}
     .pipe-label.unknown{color:var(--muted)}
     .pipe-passed{margin-left:auto;font-size:11px;color:var(--green)}
-
-    /* ── Funnel bars ── */
     .funnel-body{padding:12px 16px}
     .funnel-stage{margin-bottom:10px}
     .funnel-stage-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
@@ -64,14 +66,12 @@
     .funnel-reason{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);padding:1px 0}
     .funnel-reason span:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
     .funnel-reason span:last-child{color:var(--muted2);flex-shrink:0;margin-left:8px}
-
     .funnel-passed-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0 2px;border-top:1px solid var(--border);margin-top:8px}
     .funnel-passed-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--green)}
     .funnel-passed-count{font-size:13px;font-weight:700;color:var(--green)}
-
     .funnel-empty{font-size:12px;color:var(--muted);padding:20px 0;text-align:center}
 
-    /* ── Config tables ── */
+    /* ── Config cards ── */
     .cfg-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:12px}
     .cfg-card-head{padding:10px 14px;background:var(--bg3);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none}
     .cfg-card-head:hover{background:var(--border2)}
@@ -81,7 +81,7 @@
     .cfg-label.limit_order{color:var(--blue)}
     .cfg-chevron{font-size:10px;color:var(--muted);transition:transform .2s}
     .cfg-chevron.open{transform:rotate(180deg)}
-    .cfg-body{display:none;padding:0}
+    .cfg-body{display:none}
     .cfg-body.open{display:block}
     .cfg-table{width:100%;border-collapse:collapse}
     .cfg-table td{padding:5px 14px;border-bottom:1px solid var(--border);font-size:12px}
@@ -103,30 +103,78 @@
     .btn-primary{border-color:var(--indigo);color:var(--indigo)}
     .btn-primary:hover{background:#1e1b4b;color:#818cf8}
     .ts-label{font-size:11px;color:var(--muted2);margin-left:auto}
-
-    /* ── Spinner ── */
     .spinner{width:20px;height:20px;border:2px solid var(--border2);border-top-color:var(--indigo);border-radius:50%;animation:spin .7s linear infinite;margin:40px auto;display:block}
     @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* ── Mobile ── */
+    @media(max-width:640px){
+      header{left:0;padding:0 12px}
+      #sidebar{position:fixed;left:0;top:auto;bottom:0;height:56px;width:100%;flex-direction:row;align-items:center;padding:0 8px;gap:0;border-right:none;border-top:1px solid var(--border)}
+      #sidebar img{display:none}
+      nav{flex-direction:row;padding:0;width:100%;justify-content:space-around;gap:0}
+      .nav-btn{flex:1;padding:6px 4px;border-radius:8px}
+      .nav-btn:hover .tip{display:none}
+      #main{margin-left:0;padding:16px;padding-bottom:72px}
+    }
   </style>
 </head>
 <body>
 
-<div class="header">
-  <a class="header-back" href="/">
-    <svg viewBox="0 0 20 20" fill="currentColor" style="width:14px;height:14px"><path fill-rule="evenodd" d="M17 10a.75.75 0 01-.75.75H5.612l4.158 3.96a.75.75 0 11-1.04 1.08l-5.5-5.25a.75.75 0 010-1.08l5.5-5.25a.75.75 0 111.04 1.08L5.612 9.25H16.25A.75.75 0 0117 10z" clip-rule="evenodd"/></svg>
-    Dashboard
-  </a>
-  <span class="header-title">Diagnostics</span>
-  <span class="badge badge-readonly">Read-only</span>
-  <span class="header-sub" id="ts-label">—</span>
-</div>
+<!-- ── Sidebar ── -->
+<aside id="sidebar">
+  <img src="/logo.png" alt="Argus"/>
+  <nav>
+    <a class="nav-btn" href="/">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" stroke-width="2"/><rect x="14" y="3" width="7" height="7" rx="1" stroke-width="2"/><rect x="3" y="14" width="7" height="7" rx="1" stroke-width="2"/><rect x="14" y="14" width="7" height="7" rx="1" stroke-width="2"/></svg>
+      <span class="tip">Dashboard</span>
+    </a>
+    <a class="nav-btn" href="/?page=dryrun">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+      <span class="tip">Dry Run</span>
+    </a>
+    <a class="nav-btn" href="/?page=patterns">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+      <span class="tip">Patterns</span>
+    </a>
+    <a class="nav-btn" href="/?page=hivemind">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      <span class="tip">Hivemind</span>
+    </a>
+    <a class="nav-btn" href="/?page=wallet">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
+      <span class="tip">Wallet</span>
+    </a>
+    <a class="nav-btn" href="/?page=log">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+      <span class="tip">Log</span>
+    </a>
+    <a class="nav-btn" href="/?page=brain">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M12 3a3 3 0 00-3 3 3 3 0 00-3 3 3 3 0 000 6 3 3 0 003 3 3 3 0 006 0 3 3 0 003-3 3 3 0 000-6 3 3 0 00-3-3 3 3 0 00-3-3zm0 0v18"/></svg>
+      <span class="tip">Brain</span>
+    </a>
+    <a class="nav-btn active" href="/diagnostics">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+      <span class="tip">Diagnostics</span>
+    </a>
+  </nav>
+</aside>
 
-<div class="content">
+<!-- ── Header ── -->
+<header>
+  <h1>ARGUS <span class="hdr-page">Diagnostics</span> <span class="ver">v0.4.0</span></h1>
+  <div class="hdr-right">
+    <span class="badge-readonly">Read-only</span>
+    <span id="hdr-ts">—</span>
+  </div>
+</header>
 
-  <!-- ── Screening Funnel ─────────────────────────────────────────── -->
+<!-- ── Main ── -->
+<div id="main">
+<div class="inner">
+
+  <!-- Screening Funnel -->
   <div class="section">
     <div class="section-title">Screening Funnel <span></span></div>
-
     <div class="controls">
       <span class="ctrl-label">Window:</span>
       <select id="windowSelect" onchange="loadFunnel()">
@@ -138,30 +186,23 @@
       <button class="btn btn-primary" onclick="reload()">↻ Refresh</button>
       <span class="ts-label" id="funnelTs"></span>
     </div>
-
-    <div class="grid-3" id="funnelGrid">
-      <div class="spinner"></div>
-    </div>
+    <div class="grid-3" id="funnelGrid"><div class="spinner"></div></div>
   </div>
 
-  <!-- ── Effective Config ─────────────────────────────────────────── -->
+  <!-- Effective Config -->
   <div class="section">
     <div class="section-title">Effective Config per Pipeline <span></span></div>
-    <p style="font-size:11px;color:var(--muted);margin-bottom:14px">
-      Merged screening parameters after profile overrides. Click a pipeline to expand.
-    </p>
-    <div id="configContainer">
-      <div class="spinner"></div>
-    </div>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:14px">Merged screening parameters after profile overrides. Click a pipeline to expand.</p>
+    <div id="configContainer"><div class="spinner"></div></div>
   </div>
 
+</div>
 </div>
 
 <script>
 const PIPELINE_NAMES = { bid_ask: 'Bid / Ask', spot: 'Spot', limit_order: 'Limit Order', unknown: 'Unknown' }
 const STAGE_NAMES    = { screener: 'Screener filters', enrichment: 'Post-enrichment', pattern: 'Pattern gate' }
 
-// Auth: read token from sessionStorage (set by index.html on login — same origin)
 let TOKEN = sessionStorage.getItem('argus_token')
 
 function apiFetch(url, opts = {}) {
@@ -186,7 +227,6 @@ async function loadFunnel() {
 function renderFunnel(data) {
   const pipelines = data.pipelines || {}
   const ORDER = ['bid_ask', 'spot', 'limit_order']
-  // Collect all pipeline names (known order first, then any extras)
   const all = [...ORDER, ...Object.keys(pipelines).filter(k => !ORDER.includes(k))]
   const present = all.filter(k => pipelines[k])
 
@@ -196,7 +236,6 @@ function renderFunnel(data) {
     return
   }
 
-  // Find max total rejections across all pipelines for bar scaling
   let maxRej = 1
   for (const key of present) {
     const p = pipelines[key]
@@ -226,7 +265,7 @@ function renderFunnel(data) {
     }).join('')
 
     const body = totalRejected === 0 && passed === 0
-      ? `<div class="funnel-empty">No data in this window</div>`
+      ? `<div class="funnel-empty">No data in this window yet</div>`
       : stageHtml + `
         <div class="funnel-passed-row">
           <span class="funnel-passed-label">Passed → Decisions</span>
@@ -291,7 +330,6 @@ function renderConfig(data) {
       </div>`
   }).join('')
 
-  // Open the first one by default
   const first = document.querySelector('.cfg-card-head')
   if (first) toggleCfg(first)
 }
@@ -323,8 +361,7 @@ function esc(s) {
 
 function reload() { loadFunnel(); loadConfig() }
 
-// Init
-document.getElementById('ts-label').textContent = new Date().toLocaleDateString('id', { weekday:'short', day:'numeric', month:'short' })
+document.getElementById('hdr-ts').textContent = new Date().toLocaleDateString('id', { weekday:'short', day:'numeric', month:'short' })
 loadFunnel()
 loadConfig()
 </script>
