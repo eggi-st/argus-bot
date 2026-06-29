@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Argus · Diagnostics</title>
+  <style>
+    :root {
+      --bg:      #030712;
+      --bg2:     #111827;
+      --bg3:     #1f2937;
+      --border:  #1f2937;
+      --border2: #374151;
+      --text:    #f1f5f9;
+      --muted:   #6b7280;
+      --muted2:  #4b5563;
+      --green:   #22c55e;
+      --red:     #ef4444;
+      --yellow:  #eab308;
+      --blue:    #3b82f6;
+      --indigo:  #6366f1;
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    ::-webkit-scrollbar{width:4px;height:4px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+    body{background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Courier New",monospace;font-size:13px;line-height:1.5;min-height:100vh}
+
+    /* ── Header ── */
+    .header{display:flex;align-items:center;gap:14px;padding:16px 24px;border-bottom:1px solid var(--border);background:#0d1117;position:sticky;top:0;z-index:10}
+    .header-back{color:var(--muted);text-decoration:none;font-size:12px;display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:6px;border:1px solid var(--border2);transition:all .15s}
+    .header-back:hover{color:var(--text);border-color:var(--muted)}
+    .header-title{font-size:15px;font-weight:600;color:var(--text)}
+    .header-sub{font-size:11px;color:var(--muted);margin-left:auto}
+    .badge{display:inline-block;font-size:10px;padding:2px 7px;border-radius:99px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+    .badge-readonly{background:#1e1b4b;color:#818cf8;border:1px solid #3730a3}
+
+    /* ── Layout ── */
+    .content{max-width:1100px;margin:0 auto;padding:24px}
+    .section{margin-bottom:32px}
+    .section-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px;display:flex;align-items:center;gap:8px}
+    .section-title span{flex:1;height:1px;background:var(--border)}
+    .grid-3{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+
+    /* ── Pipeline Card ── */
+    .pipe-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+    .pipe-card-head{padding:12px 16px;background:var(--bg3);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+    .pipe-label{font-size:13px;font-weight:600}
+    .pipe-label.bid_ask{color:#f59e0b}
+    .pipe-label.spot{color:var(--green)}
+    .pipe-label.limit_order{color:var(--blue)}
+    .pipe-label.unknown{color:var(--muted)}
+    .pipe-passed{margin-left:auto;font-size:11px;color:var(--green)}
+
+    /* ── Funnel bars ── */
+    .funnel-body{padding:12px 16px}
+    .funnel-stage{margin-bottom:10px}
+    .funnel-stage-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
+    .funnel-stage-name{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+    .funnel-stage-count{font-size:12px;font-weight:700;color:var(--red)}
+    .funnel-bar-outer{height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;margin-bottom:6px}
+    .funnel-bar-inner{height:100%;background:var(--red);border-radius:3px;transition:width .4s}
+    .funnel-reasons{display:flex;flex-direction:column;gap:2px}
+    .funnel-reason{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);padding:1px 0}
+    .funnel-reason span:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+    .funnel-reason span:last-child{color:var(--muted2);flex-shrink:0;margin-left:8px}
+
+    .funnel-passed-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0 2px;border-top:1px solid var(--border);margin-top:8px}
+    .funnel-passed-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--green)}
+    .funnel-passed-count{font-size:13px;font-weight:700;color:var(--green)}
+
+    .funnel-empty{font-size:12px;color:var(--muted);padding:20px 0;text-align:center}
+
+    /* ── Config tables ── */
+    .cfg-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:12px}
+    .cfg-card-head{padding:10px 14px;background:var(--bg3);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none}
+    .cfg-card-head:hover{background:var(--border2)}
+    .cfg-label{font-size:12px;font-weight:600}
+    .cfg-label.bid_ask{color:#f59e0b}
+    .cfg-label.spot{color:var(--green)}
+    .cfg-label.limit_order{color:var(--blue)}
+    .cfg-chevron{font-size:10px;color:var(--muted);transition:transform .2s}
+    .cfg-chevron.open{transform:rotate(180deg)}
+    .cfg-body{display:none;padding:0}
+    .cfg-body.open{display:block}
+    .cfg-table{width:100%;border-collapse:collapse}
+    .cfg-table td{padding:5px 14px;border-bottom:1px solid var(--border);font-size:12px}
+    .cfg-table tr:last-child td{border-bottom:none}
+    .cfg-table td:first-child{color:var(--muted);width:55%}
+    .cfg-table td:last-child{color:var(--text);font-weight:500;text-align:right}
+    .cfg-table td:last-child.val-null{color:var(--muted2);font-style:italic}
+    .cfg-table td:last-child.val-true{color:var(--green)}
+    .cfg-table td:last-child.val-false{color:var(--red)}
+    .cfg-section-sep td{background:var(--bg3);color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em;padding:4px 14px;font-weight:600}
+
+    /* ── Controls ── */
+    .controls{display:flex;gap:10px;align-items:center;margin-bottom:20px;flex-wrap:wrap}
+    .ctrl-label{font-size:11px;color:var(--muted)}
+    select{background:var(--bg2);border:1px solid var(--border2);color:var(--text);font-size:12px;padding:5px 10px;border-radius:6px;cursor:pointer;outline:none;font-family:inherit}
+    select:focus{border-color:var(--indigo)}
+    .btn{padding:6px 14px;border-radius:6px;border:1px solid var(--border2);background:var(--bg2);color:var(--muted);font-size:12px;cursor:pointer;font-family:inherit;transition:all .15s}
+    .btn:hover{background:var(--bg3);color:var(--text)}
+    .btn-primary{border-color:var(--indigo);color:var(--indigo)}
+    .btn-primary:hover{background:#1e1b4b;color:#818cf8}
+    .ts-label{font-size:11px;color:var(--muted2);margin-left:auto}
+
+    /* ── Spinner ── */
+    .spinner{width:20px;height:20px;border:2px solid var(--border2);border-top-color:var(--indigo);border-radius:50%;animation:spin .7s linear infinite;margin:40px auto;display:block}
+    @keyframes spin{to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <a class="header-back" href="/">
+    <svg viewBox="0 0 20 20" fill="currentColor" style="width:14px;height:14px"><path fill-rule="evenodd" d="M17 10a.75.75 0 01-.75.75H5.612l4.158 3.96a.75.75 0 11-1.04 1.08l-5.5-5.25a.75.75 0 010-1.08l5.5-5.25a.75.75 0 111.04 1.08L5.612 9.25H16.25A.75.75 0 0117 10z" clip-rule="evenodd"/></svg>
+    Dashboard
+  </a>
+  <span class="header-title">Diagnostics</span>
+  <span class="badge badge-readonly">Read-only</span>
+  <span class="header-sub" id="ts-label">—</span>
+</div>
+
+<div class="content">
+
+  <!-- ── Screening Funnel ─────────────────────────────────────────── -->
+  <div class="section">
+    <div class="section-title">Screening Funnel <span></span></div>
+
+    <div class="controls">
+      <span class="ctrl-label">Window:</span>
+      <select id="windowSelect" onchange="loadFunnel()">
+        <option value="6">Last 6 hours</option>
+        <option value="24" selected>Last 24 hours</option>
+        <option value="48">Last 48 hours</option>
+        <option value="168">Last 7 days</option>
+      </select>
+      <button class="btn btn-primary" onclick="reload()">↻ Refresh</button>
+      <span class="ts-label" id="funnelTs"></span>
+    </div>
+
+    <div class="grid-3" id="funnelGrid">
+      <div class="spinner"></div>
+    </div>
+  </div>
+
+  <!-- ── Effective Config ─────────────────────────────────────────── -->
+  <div class="section">
+    <div class="section-title">Effective Config per Pipeline <span></span></div>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:14px">
+      Merged screening parameters after profile overrides. Click a pipeline to expand.
+    </p>
+    <div id="configContainer">
+      <div class="spinner"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const PIPELINE_NAMES = { bid_ask: 'Bid / Ask', spot: 'Spot', limit_order: 'Limit Order', unknown: 'Unknown' }
+const STAGE_NAMES    = { screener: 'Screener filters', enrichment: 'Post-enrichment', pattern: 'Pattern gate' }
+
+async function loadFunnel() {
+  const hours = document.getElementById('windowSelect').value
+  document.getElementById('funnelGrid').innerHTML = '<div class="spinner"></div>'
+  try {
+    const data = await (await fetch(`/api/screening-funnel?hours=${hours}`)).json()
+    if (data.error) throw new Error(data.error)
+    renderFunnel(data)
+    document.getElementById('funnelTs').textContent = 'Updated ' + new Date().toLocaleTimeString()
+  } catch (e) {
+    document.getElementById('funnelGrid').innerHTML = `<p style="color:var(--red);font-size:12px;padding:12px">Error: ${e.message}</p>`
+  }
+}
+
+function renderFunnel(data) {
+  const pipelines = data.pipelines || {}
+  const ORDER = ['bid_ask', 'spot', 'limit_order']
+  // Collect all pipeline names (known order first, then any extras)
+  const all = [...ORDER, ...Object.keys(pipelines).filter(k => !ORDER.includes(k))]
+  const present = all.filter(k => pipelines[k])
+
+  if (!present.length) {
+    document.getElementById('funnelGrid').innerHTML =
+      '<p style="color:var(--muted);font-size:12px;padding:20px">No screening data in this window yet.</p>'
+    return
+  }
+
+  // Find max total rejections across all pipelines for bar scaling
+  let maxRej = 1
+  for (const key of present) {
+    const p = pipelines[key]
+    for (const s of Object.values(p.stages || {})) maxRej = Math.max(maxRej, s.total)
+  }
+
+  document.getElementById('funnelGrid').innerHTML = present.map(key => {
+    const p = pipelines[key]
+    const stages = p.stages || {}
+    const passed = p.passed ?? 0
+    const totalRejected = Object.values(stages).reduce((a, s) => a + s.total, 0)
+
+    const stageHtml = Object.entries(stages).map(([stage, s]) => {
+      const pct = Math.round((s.total / maxRej) * 100)
+      const reasonsHtml = s.reasons.slice(0, 4).map(r =>
+        `<div class="funnel-reason"><span title="${esc(r.reason)}">${esc(r.reason)}</span><span>${r.count}</span></div>`
+      ).join('')
+      return `
+        <div class="funnel-stage">
+          <div class="funnel-stage-head">
+            <span class="funnel-stage-name">${STAGE_NAMES[stage] || stage}</span>
+            <span class="funnel-stage-count">−${s.total}</span>
+          </div>
+          <div class="funnel-bar-outer"><div class="funnel-bar-inner" style="width:${pct}%"></div></div>
+          <div class="funnel-reasons">${reasonsHtml}</div>
+        </div>`
+    }).join('')
+
+    const body = totalRejected === 0 && passed === 0
+      ? `<div class="funnel-empty">No data in this window</div>`
+      : stageHtml + `
+        <div class="funnel-passed-row">
+          <span class="funnel-passed-label">Passed → Decisions</span>
+          <span class="funnel-passed-count">+${passed}</span>
+        </div>`
+
+    return `
+      <div class="pipe-card">
+        <div class="pipe-card-head">
+          <span class="pipe-label ${key}">${PIPELINE_NAMES[key] || key}</span>
+          ${passed > 0 ? `<span class="pipe-passed">✓ ${passed} decision${passed !== 1 ? 's' : ''}</span>` : ''}
+        </div>
+        <div class="funnel-body">${body}</div>
+      </div>`
+  }).join('')
+}
+
+async function loadConfig() {
+  document.getElementById('configContainer').innerHTML = '<div class="spinner"></div>'
+  try {
+    const data = await (await fetch('/api/config/effective')).json()
+    if (data.error) throw new Error(data.error)
+    renderConfig(data)
+  } catch (e) {
+    document.getElementById('configContainer').innerHTML =
+      `<p style="color:var(--red);font-size:12px;padding:12px">Error: ${e.message}</p>`
+  }
+}
+
+const CFG_GROUPS = [
+  { label: 'Market caps & liquidity', keys: ['minMcap','maxMcap','minHolders','minVolume','minTvl','maxTvl'] },
+  { label: 'DLMM params', keys: ['minBinStep','maxBinStep','minFeeActiveTvlRatio'] },
+  { label: 'Quality', keys: ['minOrganic','minQuoteOrganic','maxVolatility'] },
+  { label: 'Token age', keys: ['minTokenAgeHours','maxTokenAgeHours'] },
+  { label: 'Anti-rug', keys: ['antirug.enabled','antirug.minTokenAgeHours','antirug.maxTvlMcapRatio'] },
+]
+
+function renderConfig(data) {
+  const pipelines = data.pipelines || {}
+  const ORDER = ['bid_ask', 'spot', 'limit_order']
+  const all = [...ORDER, ...Object.keys(pipelines).filter(k => !ORDER.includes(k))]
+
+  document.getElementById('configContainer').innerHTML = all.filter(k => pipelines[k]).map(key => {
+    const cfg = pipelines[key]
+    const rows = CFG_GROUPS.map(g => {
+      const dataRows = g.keys.map(k => {
+        const val = k.includes('.') ? k.split('.').reduce((o, p) => o?.[p], cfg) : cfg[k]
+        return `<tr><td>${k}</td><td class="${valClass(val)}">${renderVal(val)}</td></tr>`
+      }).join('')
+      return `<tr class="cfg-section-sep"><td colspan="2">${g.label}</td></tr>${dataRows}`
+    }).join('')
+
+    return `
+      <div class="cfg-card">
+        <div class="cfg-card-head" onclick="toggleCfg(this)">
+          <span class="cfg-label ${key}">${PIPELINE_NAMES[key] || key}</span>
+          <span class="cfg-chevron">▾</span>
+        </div>
+        <div class="cfg-body">
+          <table class="cfg-table"><tbody>${rows}</tbody></table>
+        </div>
+      </div>`
+  }).join('')
+
+  // Open the first one by default
+  const first = document.querySelector('.cfg-card-head')
+  if (first) toggleCfg(first)
+}
+
+function toggleCfg(head) {
+  const chevron = head.querySelector('.cfg-chevron')
+  const body    = head.nextElementSibling
+  const isOpen  = body.classList.contains('open')
+  body.classList.toggle('open', !isOpen)
+  chevron.classList.toggle('open', !isOpen)
+}
+
+function valClass(v) {
+  if (v === null || v === undefined) return 'val-null'
+  if (v === true)  return 'val-true'
+  if (v === false) return 'val-false'
+  return ''
+}
+
+function renderVal(v) {
+  if (v === null || v === undefined) return 'null'
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+}
+
+function reload() { loadFunnel(); loadConfig() }
+
+// Init
+document.getElementById('ts-label').textContent = new Date().toLocaleDateString('id', { weekday:'short', day:'numeric', month:'short' })
+loadFunnel()
+loadConfig()
+</script>
+</body>
+</html>

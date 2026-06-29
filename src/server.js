@@ -690,6 +690,86 @@ app.get('/api/screening-rejections', (req, res) => {
   }
 })
 
+// Screening funnel: per-pipeline waterfall showing how many pools were eliminated at each stage.
+// Query window: last 24h of rejections (covers several scan cycles).
+// "passed" is derived from decisions created in the same window per strategy.
+app.get('/api/screening-funnel', (req, res) => {
+  try {
+    const hours = Math.min(parseInt(req.query.hours || '24', 10), 168)
+    const since = new Date(Date.now() - hours * 3600 * 1000).toISOString()
+
+    // Rejections per pipeline × stage × reason (last N hours)
+    const rejRows = db.prepare(`
+      SELECT
+        COALESCE(pipeline, 'unknown') AS pipeline,
+        reject_stage,
+        reason,
+        COUNT(*) AS count
+      FROM screening_rejections
+      WHERE scanned_at >= ?
+      GROUP BY pipeline, reject_stage, reason
+      ORDER BY pipeline, reject_stage, count DESC
+    `).all(since)
+
+    // Decisions per strategy in same window (proxy for "passed")
+    const passedRows = db.prepare(`
+      SELECT strategy, COUNT(*) AS count
+      FROM decisions
+      WHERE created_at >= ?
+      GROUP BY strategy
+    `).all(since)
+
+    const passedMap = {}
+    for (const r of passedRows) passedMap[r.strategy] = r.count
+
+    // Build per-pipeline funnel
+    const funnels = {}
+    for (const r of rejRows) {
+      if (!funnels[r.pipeline]) funnels[r.pipeline] = { stages: {} }
+      const s = funnels[r.pipeline].stages
+      if (!s[r.reject_stage]) s[r.reject_stage] = { total: 0, reasons: [] }
+      s[r.reject_stage].total += r.count
+      s[r.reject_stage].reasons.push({ reason: r.reason, count: r.count })
+    }
+
+    // Attach passed counts (pipeline name == strategy name in our setup)
+    for (const [pipe, data] of Object.entries(funnels)) {
+      data.passed = passedMap[pipe] ?? 0
+    }
+
+    // Also include pipelines that had decisions but no rejections (rare — all passed)
+    for (const [strategy, count] of Object.entries(passedMap)) {
+      if (!funnels[strategy]) funnels[strategy] = { stages: {}, passed: count }
+    }
+
+    res.json({ window_hours: hours, since, pipelines: funnels })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Effective config: shows the resolved screening config for each pipeline (after profile merging).
+// Read-only — no mutation. Useful for diagnosing why a pool was rejected.
+app.get('/api/config/effective', (req, res) => {
+  try {
+    const { getConfig } = require('./config')
+    const { resolveScreening } = require('./intelligence/index')
+    const cfg = getConfig()
+    const pipelines = cfg.scan?.pipelines ?? [
+      { profile: 'bid_ask',     strategy: 'bid_ask' },
+      { profile: 'spot',        strategy: 'spot' },
+      { profile: 'limit_order', strategy: 'limit_order' },
+    ]
+    const effective = {}
+    for (const pipe of pipelines) {
+      effective[pipe.profile] = resolveScreening(cfg, pipe.profile)
+    }
+    res.json({ pipelines: effective })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 app.get('/api/capability-gaps', (req, res) => {
   try {
     const status = req.query.status || 'open'

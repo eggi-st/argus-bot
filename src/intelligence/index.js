@@ -383,7 +383,7 @@ async function runScan() {
       const screening = resolveScreening(cfg, pipe.profile)
       let res
       try {
-        res = await getTopCandidates({ limit, screening })
+        res = await getTopCandidates({ limit, screening, pipeline: pipe.profile })
       } catch (e) {
         console.error(`[IC] Pipeline ${pipe.profile} screening failed:`, e.message)
         continue

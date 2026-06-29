@@ -199,6 +199,9 @@ function migrateSchema() {
     // wallet's LP entries correlated with profitable Argus outcomes. Default 0.5 = neutral.
     `ALTER TABLE tracked_wallets ADD COLUMN lifecycle_state TEXT DEFAULT 'active'`,
     `ALTER TABLE tracked_wallets ADD COLUMN quality_score REAL DEFAULT 0.5`,
+    // Screening funnel (2026-06-29): tag each rejection with the pipeline that produced it
+    // so the /api/screening-funnel endpoint can show per-pipeline waterfall breakdowns.
+    `ALTER TABLE screening_rejections ADD COLUMN pipeline TEXT`,
   ]
   let added = 0
   for (const sql of cols) {
@@ -555,11 +558,11 @@ function recordFeedbackOutcome(data) {
 }
 
 function recordRejection(data) {
-  return getStmt('insertRejection', `
+  return getStmt('insertRejection2', `
     INSERT INTO screening_rejections
-      (scanned_at, pool_address, token_symbol, token_mint, reject_stage, reason, key_metrics)
+      (scanned_at, pool_address, token_symbol, token_mint, reject_stage, reason, key_metrics, pipeline)
     VALUES
-      (@scanned_at, @pool_address, @token_symbol, @token_mint, @reject_stage, @reason, @key_metrics)
+      (@scanned_at, @pool_address, @token_symbol, @token_mint, @reject_stage, @reason, @key_metrics, @pipeline)
   `).run(data)
 }
 

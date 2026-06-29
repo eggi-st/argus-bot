@@ -344,7 +344,7 @@ function condensePool(p, volatilityTf) {
  * Fetch pools from Meteora Pool Discovery, apply screening filters.
  * Returns { pools, total, filtered_examples }
  */
-async function discoverPools({ page_size = 50, screening } = {}) {
+async function discoverPools({ page_size = 50, screening, pipeline } = {}) {
   const s = screening || getConfig().screening
   const targetTf = getVolatilityTf(s.timeframe)
 
@@ -387,6 +387,7 @@ async function discoverPools({ page_size = 50, screening } = {}) {
           token_mint:   getBaseMint(pool),
           reject_stage: 'screener',
           reason,
+          pipeline:     pipeline || null,
           key_metrics:  JSON.stringify({
             vol:     pool.volatility,
             fee_tvl: pool.fee_active_tvl_ratio,
@@ -425,8 +426,8 @@ async function discoverPools({ page_size = 50, screening } = {}) {
  * Get top screened candidates with OKX enrichment applied.
  * Returns { candidates, total_screened, filtered_examples }
  */
-async function getTopCandidates({ limit = 10, screening } = {}) {
-  const discovery = await discoverPools({ page_size: 50, screening })
+async function getTopCandidates({ limit = 10, screening, pipeline } = {}) {
+  const discovery = await discoverPools({ page_size: 50, screening, pipeline })
   const { pools, total, filtered_examples } = discovery
 
   // Deduplicate by base mint, sort by score, enrich only the top (limit + small buffer).
@@ -469,6 +470,7 @@ async function getTopCandidates({ limit = 10, screening } = {}) {
           token_mint:   p.base?.mint   || null,
           reject_stage: 'enrichment',
           reason:       rejectReason,
+          pipeline:     pipeline || null,
           key_metrics:  JSON.stringify({
             vol: p.volatility, fee_tvl: p.fee_active_tvl_ratio,
             organic: p.organic_score, holders: p.holders,
