@@ -648,6 +648,48 @@ function switchPage(id) {
   PAGE_LOADERS[id]?.()
 }
 
+// ── Decision trace (#7) — why Argus chose this, step by step ───────────────────
+const TRACE_STEP_LABEL = { base_score:'skor dasar', pattern_adjust:'pattern', smart_money:'smart money', entry_indicator:'indikator entry', liquidity_penalty:'likuiditas', final:'final' }
+function renderDecisionTrace(p) {
+  const scores = p.strategy_scores, trace = p.confidence_trace
+  if (!scores && !trace) return ''
+  let html = '<div class="dr-m-sect">Jejak keputusan — kenapa Argus pilih ini</div>'
+  // Per-strategy scores: which competed, which won
+  if (Array.isArray(scores) && scores.length) {
+    html += '<div style="font-size:10px;color:var(--muted2);margin-bottom:4px">Skor per strategi</div>'
+    html += scores.map(s => {
+      const chosen = s.strategy === p.strategy
+      const col = !s.eligible ? 'var(--muted)' : chosen ? 'var(--green)' : 'var(--fg)'
+      const badge = chosen ? '<span style="color:var(--green);font-weight:700">✓ dipilih</span>' : (s.eligible ? '<span style="color:var(--muted2)">eligible</span>' : '<span style="color:var(--muted)">tidak eligible</span>')
+      return `<div style="display:flex;gap:8px;align-items:baseline;padding:2px 0;font-size:11px">
+        <span style="color:${col};font-weight:${chosen?700:500};min-width:84px">${STRAT_LABEL[s.strategy]||s.strategy}</span>
+        <span style="color:${col};min-width:38px">${s.score!=null?(+s.score).toFixed(2):'—'}</span>
+        <span>${badge}</span>
+        <span style="color:var(--muted2);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(s.reason||'').replace(/</g,'&lt;')}</span>
+      </div>`
+    }).join('')
+  }
+  // Confidence build-up steps
+  if (Array.isArray(trace) && trace.length) {
+    html += '<div style="font-size:10px;color:var(--muted2);margin:8px 0 4px">Build confidence</div>'
+    html += '<div style="font-family:ui-monospace,monospace;font-size:11px">'
+    html += trace.map(t => {
+      const isFinal = t.step === 'final'
+      const pctV = t.value!=null ? Math.round(t.value*100)+'%' : '—'
+      const factor = t.factor!=null && t.factor!==1 ? `<span style="color:${t.factor<1?'var(--red)':'var(--green)'}">×${t.factor}</span>` : ''
+      return `<div style="display:grid;grid-template-columns:104px 48px 44px 1fr;gap:6px;align-items:baseline;padding:1.5px 0">
+        <span style="color:${isFinal?'var(--fg)':'var(--muted)'};font-weight:${isFinal?700:400}">${TRACE_STEP_LABEL[t.step]||t.step}</span>
+        <span style="color:${isFinal?'var(--green)':'var(--fg)'};font-weight:${isFinal?700:500};text-align:right">${pctV}</span>
+        <span style="text-align:right">${factor}</span>
+        <span style="color:var(--muted2);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(t.detail||'').replace(/</g,'&lt;')}</span>
+      </div>`
+    }).join('') + '</div>'
+  } else if (scores) {
+    html += '<div style="font-size:10px;color:var(--muted2);margin-top:6px">Jejak confidence belum direkam (keputusan lama — hanya skor strategi tersedia).</div>'
+  }
+  return html
+}
+
 // ── Dry-run position detail modal ──────────────────────────────────────────────
 function closeDrModal() { document.getElementById('dr-modal').classList.add('hidden') }
 function openDrModal(id) {
@@ -712,7 +754,8 @@ function openDrModal(id) {
         ${cell('Price move', p.exit_metrics.price_move_pct!=null?pct(+(p.exit_metrics.price_move_pct).toFixed(2)):'—', p.exit_metrics.price_move_pct!=null?cPct(p.exit_metrics.price_move_pct):'')}
         ${cell('Fill fraction', p.exit_metrics.fill_fraction!=null?Math.round(p.exit_metrics.fill_fraction*100)+'%':'—')}
         ${cell('Slip cost', p.exit_metrics.slip_cost_pct!=null?pct(+(p.exit_metrics.slip_cost_pct).toFixed(3)):'—')}
-      </div>` : ''}`
+      </div>` : ''}
+      ${renderDecisionTrace(p)}`
   }).catch(() => { body.innerHTML = '<div class="empty">Gagal memuat.</div>' })
 }
 

@@ -186,6 +186,10 @@ function migrateSchema() {
     `ALTER TABLE decisions ADD COLUMN primary_technique TEXT`,
     `ALTER TABLE decisions ADD COLUMN technique_author TEXT`,
     `ALTER TABLE decisions ADD COLUMN signal_provenance_json TEXT`,
+    // Decision-trace (2026-06-30): ordered confidence build-up steps (base score → pattern adjust
+    // → smart-money/indicator boosts → liquidity penalty → final). Stored at decision time so the
+    // "why" is auditable verbatim, not reconstructed. Argus's deterministic equivalent of an agent log.
+    `ALTER TABLE decisions ADD COLUMN confidence_trace_json TEXT`,
     // Dry-run: record which technique opened/closed the position (replaces blind ttl_expired).
     `ALTER TABLE dry_run_positions ADD COLUMN entry_technique TEXT`,
     `ALTER TABLE dry_run_positions ADD COLUMN exit_technique TEXT`,
@@ -525,12 +529,12 @@ function recordDecision(data) {
     INSERT INTO decisions
       (created_at, expires_at, token_mint, token_symbol, pool_address, strategy,
        indicators_json, strategy_scores_json, llm_verdict, confidence, condition_bucket,
-       primary_technique, technique_author, signal_provenance_json)
+       primary_technique, technique_author, signal_provenance_json, confidence_trace_json)
     VALUES
       (@created_at, @expires_at, @token_mint, @token_symbol, @pool_address, @strategy,
        @indicators_json, @strategy_scores_json, @llm_verdict, @confidence, @condition_bucket,
-       @primary_technique, @technique_author, @signal_provenance_json)
-  `).run(data)
+       @primary_technique, @technique_author, @signal_provenance_json, @confidence_trace_json)
+  `).run({ confidence_trace_json: null, ...data })
 }
 
 function expireDecision(id) {

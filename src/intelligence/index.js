@@ -16,6 +16,8 @@ const dryRun               = require('../dry-run/engine')
 
 let _scanning = false
 
+const round3 = x => (x == null ? null : Math.round(x * 1000) / 1000)
+
 /**
  * Wilson score lower bound for a binomial proportion (win rate).
  * Widens the interval for small N, so a high point-estimate on thin data
@@ -234,6 +236,15 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
   let confidence = adj
   const pattern = pat
 
+  // Decision-trace (#7): record the confidence build-up verbatim so the "why" is auditable.
+  const trace = [{ step: 'base_score', value: round3(score.score), detail: `${forceStrategy} rule score` }]
+  if (pat) {
+    trace.push({ step: 'pattern_adjust', value: round3(adj), factor: null,
+      detail: pat.active
+        ? `${volatility_bucket}×${regime}×${forceStrategy} active WR ${(pat.win_rate*100||0).toFixed(0)}% N=${pat.sample_count} (${pat.source||'sim'})`
+        : `pattern calibrating (N=${pat.sample_count||0}) → shrink toward base rate` })
+  }
+
   // Smart money confirmation: boost confidence if a tracked wallet recently LP'd this pool
   let smartMoneyConfirmed = false
   try {
@@ -248,6 +259,7 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
     if ((smRow?.cnt || 0) > 0) {
       smartMoneyConfirmed = true
       confidence = Math.min(1, confidence * 1.15)
+      trace.push({ step: 'smart_money', value: round3(confidence), factor: 1.15, detail: `${smRow.cnt} smart wallet(s) LP'd in 24h` })
       console.log(`[IC] 🐋 Smart money signal: ${smRow.cnt} wallet(s) in ${pool.base?.symbol} → conf boosted to ${(confidence*100).toFixed(0)}`)
     }
   } catch (e) {
@@ -259,6 +271,7 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
   if (pool.entry_indicator && !pool.entry_indicator.skipped && pool.entry_indicator.confirmed) {
     confidence = Math.min(1, confidence * 1.10)
     pool.entry_technique = pool.entry_indicator.technique
+    trace.push({ step: 'entry_indicator', value: round3(confidence), factor: 1.10, detail: `${pool.entry_indicator.technique} confirmed` })
     console.log(`[IC] Entry indicator confirmed (${pool.entry_indicator.technique}): ${pool.base?.symbol} → conf boosted to ${(confidence * 100).toFixed(0)}%`)
   }
 
@@ -266,8 +279,10 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
   const liqMod = liquidityModifier(pool, cfg)
   if (liqMod.factor < 1) {
     confidence = confidence * liqMod.factor
+    trace.push({ step: 'liquidity_penalty', value: round3(confidence), factor: round3(liqMod.factor), detail: liqMod.note })
     console.log(`[IC] Liquidity penalty ×${liqMod.factor.toFixed(2)} (${liqMod.note}): ${pool.base?.symbol} → conf ${(confidence * 100).toFixed(0)}%`)
   }
+  trace.push({ step: 'final', value: round3(confidence), detail: exploration ? 'exploration quota (gate bypassed)' : 'gate passed' })
 
   const tvlMcapRatio = (pool.tvl != null && pool.mcap > 0) ? Math.round((pool.tvl / pool.mcap) * 10000) / 10000 : null
   const tvlPerHolder = (pool.tvl != null && pool.holders > 0) ? Math.round((pool.tvl / pool.holders) * 100) / 100 : null
@@ -334,6 +349,7 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
       primary_technique: primaryTechnique,
       technique_author: techAuthor,
       signal_provenance_json: JSON.stringify(provenance),
+      confidence_trace_json: JSON.stringify(trace),
     })
 
     const decisionId = result.lastInsertRowid
