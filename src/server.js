@@ -580,6 +580,20 @@ app.get('/api/meridian/pool/:address/signal', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// Score an arbitrary pool ON DEMAND (read-only, no decision recorded). Lets Meridian get Argus's
+// full modifier-adjusted confidence + gate verdict + trace for ITS OWN picks — the bridge for
+// shadow-follow (log Argus's verdict next to Meridian's deploy) and later confidence-gated execution.
+// Body: pool metrics Meridian already holds { pool_address, volatility, fee_active_tvl_ratio, tvl,
+// mcap, holders, token_age_hours, bin_step, organic_score, price_change_pct, volume_change_pct, ... }
+// + optional { strategy }. Returns { recommended, confidence, strategy, gate, trace, strategy_scores }.
+app.post('/api/meridian/evaluate', (req, res) => {
+  try {
+    const { strategy, ...metrics } = req.body || {}
+    const ic = require('./intelligence/index')
+    res.json(ic.evaluatePool(metrics, strategy || null))
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 app.get('/api/meridian/smart-wallets', (req, res) => {
   try {
     const meridian = require('./meridian/index')

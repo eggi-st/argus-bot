@@ -433,6 +433,103 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
 }
 
 /**
+ * Score an ARBITRARY pool on demand — read-only, NO writes (no decision, no dry-run, no Telegram).
+ * The bridge that lets Meridian get Argus's verdict on ITS OWN picks (which Argus never independently
+ * screened), so the Argus→Meridian loop can close (shadow-follow then confidence-gated execution).
+ *
+ * Reuses the SAME shared scoring/gate/modifier functions as processPool — only the orchestration is
+ * duplicated (read-only). KEEP THE CONFIDENCE-BUILD SEQUENCE IN SYNC WITH processPool: base score →
+ * pattern adjust → smart-money → entry-indicator → liquidity → age. Indicator enrichment is skipped
+ * here (caller may pass pool.entry_indicator/lo_indicator if it has them).
+ *
+ * @param metrics  pool metrics Meridian already holds (volatility, fee_active_tvl_ratio, tvl, mcap,
+ *                 holders, token_age_hours, bin_step, organic_score, price/volume_change_pct, ...)
+ * @param strategy optional — if omitted, returns the best eligible strategy's verdict.
+ */
+function evaluatePool(metrics = {}, strategy = null) {
+  const cfg = getConfig()
+  // Map Meridian metrics onto the pool shape the scoring functions expect.
+  const pool = {
+    pool: metrics.pool_address ?? metrics.pool ?? null,
+    base: { mint: metrics.token_mint ?? metrics.mint ?? null, symbol: metrics.token_symbol ?? metrics.symbol ?? '?' },
+    volatility: metrics.volatility, fee_active_tvl_ratio: metrics.fee_active_tvl_ratio,
+    tvl: metrics.tvl, mcap: metrics.mcap, holders: metrics.holders, token_age_hours: metrics.token_age_hours,
+    bin_step: metrics.bin_step, organic_score: metrics.organic_score,
+    price_change_pct: metrics.price_change_pct, volume_change_pct: metrics.volume_change_pct,
+    price_vs_ath_pct: metrics.price_vs_ath_pct, dev_sold_all: metrics.dev_sold_all,
+    volume_trend: metrics.volume_trend, entry_phase: metrics.entry_phase,
+    lo_indicator: metrics.lo_indicator ?? null, entry_indicator: metrics.entry_indicator ?? null,
+  }
+
+  const tokenGate = riskState.check(pool.base.mint)
+  if (!tokenGate.allowed) return { recommended: false, blocked: true, reason: `token blocked: ${tokenGate.reason}` }
+
+  const allScores = scoreStrategies(pool, cfg)
+  const bucket = conditionBucket(pool)
+  const { volatility_bucket, fee_bucket, regime, age_bucket } = parseBucket(bucket)
+  const gateCfg = cfg.learning?.confidenceGate ?? {}
+  const gateEnabled = gateCfg.enabled !== false
+
+  // Pick the strategy to assess: caller's, else the best ELIGIBLE one.
+  let chosen = strategy ? allScores.find(s => s.strategy === strategy)
+                        : allScores.filter(s => s.eligible).sort((a, b) => b.score - a.score)[0]
+  if (!chosen || !chosen.eligible) {
+    return { recommended: false, blocked: false, strategy: chosen?.strategy ?? strategy,
+      reason: chosen?.reason || 'no eligible strategy', bucket, strategy_scores: allScores }
+  }
+  const strat = chosen.strategy
+
+  const pat = getPattern(volatility_bucket, regime, strat, fee_bucket, age_bucket)
+  const adj = adjustScore(chosen.score, pat, cfg, strat)
+  const gate = gateEnabled ? checkPatternGate(pat, adj, gateCfg) : { blocked: false }
+
+  // Confidence build — same sequence as processPool, read-only.
+  let confidence = adj
+  const trace = [{ step: 'base_score', value: round3(chosen.score), detail: `${strat} rule score` }]
+  if (pat) trace.push({ step: 'pattern_adjust', value: round3(adj), factor: null,
+    detail: pat.active ? `${volatility_bucket}×${regime}×${strat} active WR ${(pat.win_rate*100||0).toFixed(0)}% N=${pat.sample_count} (${pat.source||'sim'})`
+                       : `pattern calibrating (N=${pat.sample_count||0})` })
+
+  let smartMoney = false
+  try {
+    const smRow = pool.pool ? db.prepare(`SELECT COUNT(DISTINCT wallet_address) cnt FROM wallet_actions
+      WHERE pool_address = ? AND wallet_type='smart_money' AND detected_at > datetime('now','-24 hours')
+        AND action_type IN ('add_liquidity','open_position')`).get(pool.pool) : { cnt: 0 }
+    if ((smRow?.cnt || 0) > 0) { smartMoney = true; confidence = Math.min(1, confidence * 1.15)
+      trace.push({ step: 'smart_money', value: round3(confidence), factor: 1.15, detail: `${smRow.cnt} smart wallet(s)` }) }
+  } catch {}
+
+  if (pool.entry_indicator && !pool.entry_indicator.skipped && pool.entry_indicator.confirmed) {
+    confidence = Math.min(1, confidence * 1.10)
+    trace.push({ step: 'entry_indicator', value: round3(confidence), factor: 1.10, detail: `${pool.entry_indicator.technique} confirmed` })
+  }
+  const liqMod = liquidityModifier(pool, cfg)
+  if (liqMod.factor < 1) { confidence *= liqMod.factor
+    trace.push({ step: 'liquidity_penalty', value: round3(confidence), factor: round3(liqMod.factor), detail: liqMod.note }) }
+  const ageMod = ageModifier(pool, cfg)
+  if (ageMod.factor < 1) { confidence *= ageMod.factor
+    trace.push({ step: 'age_penalty', value: round3(confidence), factor: round3(ageMod.factor), detail: ageMod.note }) }
+  trace.push({ step: 'final', value: round3(confidence), detail: gate.blocked ? `gate would block: ${gate.reason}` : 'gate passed' })
+
+  return {
+    recommended: !gate.blocked,
+    blocked: !!gate.blocked,
+    strategy: strat,
+    confidence: round3(confidence),
+    raw_score: round3(chosen.score),
+    condition_bucket: bucket,
+    gate,
+    smart_money_confirmed: smartMoney,
+    technique: chosen.technique || 'vol_feetvl_gate',
+    pattern: pat ? { active: !!pat.active, win_rate: pat.win_rate, sample_count: pat.sample_count, source: pat.source } : null,
+    trace,
+    strategy_scores: allScores,
+    reason: gate.blocked ? gate.reason : 'eligible',
+    source: 'argus',
+  }
+}
+
+/**
  * Run a full screening + strategy routing cycle.
  * Called automatically by the scheduler every 15 minutes.
  * Runs one screening pipeline per configured profile (bid_ask, spot), each recording
@@ -567,4 +664,4 @@ function init() {
   console.log('[IC] Intelligence Core ready (scan every 15min)')
 }
 
-module.exports = { init, runScan, checkPatternGate, wilsonLowerBound, resolveScreening }
+module.exports = { init, runScan, checkPatternGate, wilsonLowerBound, resolveScreening, evaluatePool }
