@@ -30,15 +30,29 @@ function patchForPath(path, value) {
   return root
 }
 
+// Per-strategy win-rate/mean — REAL-PREFERRED: use feedback_outcomes (actual Meridian executions)
+// when a strategy has >= minSamplesPerStrategy real closes, else fall back to SIM (dry-run). This is
+// the ground-truth source; SIM was proven directionally optimistic. Validated via preview-tuner.js:
+// SIM spot said "hold" (WR 46%) while REAL said the opposite (WR 63%) — driving off SIM is wrong.
 function strategyStats() {
-  const rows = db.prepare(`
-    SELECT strategy, COUNT(*) AS n,
-           SUM(CASE WHEN net_pnl_pct > 0 THEN 1 ELSE 0 END) AS wins,
-           AVG(net_pnl_pct) AS mean
+  const minReal = getConfig().learning?.autoTuner?.minSamplesPerStrategy ?? 50
+  const sim = db.prepare(`
+    SELECT strategy, COUNT(*) AS n, SUM(CASE WHEN net_pnl_pct > 0 THEN 1 ELSE 0 END) AS wins, AVG(net_pnl_pct) AS mean
     FROM dry_run_positions WHERE status='closed' AND outcome_valid=1 GROUP BY strategy
   `).all()
+  const real = db.prepare(`
+    SELECT strategy, COUNT(*) AS n, SUM(CASE WHEN pnl_pct > 0 THEN 1 ELSE 0 END) AS wins, AVG(pnl_pct) AS mean
+    FROM feedback_outcomes WHERE pnl_pct IS NOT NULL GROUP BY strategy
+  `).all()
+  const realMap = {}; for (const r of real) realMap[r.strategy] = r
+  const simMap  = {}; for (const r of sim)  simMap[r.strategy]  = r
   const m = {}
-  for (const r of rows) m[r.strategy] = { n: r.n, wins: r.wins, wr: r.n ? r.wins / r.n : 0, mean: r.mean ?? 0 }
+  for (const strat of new Set([...sim.map(r=>r.strategy), ...real.map(r=>r.strategy)])) {
+    const rr = realMap[strat], sr = simMap[strat]
+    const useReal = rr && rr.n >= minReal
+    const src = useReal ? rr : (sr || { n: 0, wins: 0, mean: 0 })
+    m[strat] = { n: src.n, wins: src.wins, wr: src.n ? src.wins / src.n : 0, mean: src.mean ?? 0, source: useReal ? 'real' : 'sim' }
+  }
   return m
 }
 
@@ -71,6 +85,16 @@ function proposeTuning() {
     if (lb > be + band) dir = +1        // proven profitable → widen the vol cap
     else if (ub < be - band) dir = -1   // proven unprofitable → tighten (bounded at launch min)
 
+    // Mean-P&L guard: never WIDEN a strategy whose average trade loses money. A high win-rate with a
+    // negative mean = many small wins + a fat loss tail; widening the vol cap admits MORE such pools.
+    // (Tighten is unaffected — tightening a loser is always safe.) Validated: real spot WR 63% but
+    // mean −0.18% would wrongly widen under WR-alone; the guard correctly holds.
+    const meanFloor = T.meanFloorForWiden ?? 0
+    if (dir === +1 && (spot.mean ?? 0) < meanFloor) {
+      console.log(`[Tuner] ${paramPath}: WR LB ${(lb*100).toFixed(0)}% would widen but mean ${spot.mean.toFixed(2)}% < ${meanFloor} [${spot.source}] — mean-guard holds`)
+      dir = 0
+    }
+
     if (dir !== 0) {
       const current = Number(getAtPath(cfg, paramPath))
       const last = lastEventFor(paramPath)
@@ -88,8 +112,8 @@ function proposeTuning() {
         console.log(`[Tuner] ${paramPath}: already at bound ${current} — skip`)
       } else {
         proposed++
-        const reason = `spot WR ${(spot.wr * 100).toFixed(0)}% (Wilson ${dir > 0 ? 'LB' : 'UB'} ${((dir > 0 ? lb : ub) * 100).toFixed(0)}%) vs break-even ${(be * 100).toFixed(0)}±${(band * 100).toFixed(0)} over N=${spot.n}, mean ${spot.mean.toFixed(2)}%. ` +
-          `CAVEAT: net_pnl includes single-sided IL but a capped flat fee estimate — verify the edge is not fee-only before APPLY.`
+        const reason = `[${spot.source}] spot WR ${(spot.wr * 100).toFixed(0)}% (Wilson ${dir > 0 ? 'LB' : 'UB'} ${((dir > 0 ? lb : ub) * 100).toFixed(0)}%) vs break-even ${(be * 100).toFixed(0)}±${(band * 100).toFixed(0)} over N=${spot.n}, mean ${spot.mean.toFixed(2)}%. ` +
+          `${spot.source === 'sim' ? 'CAVEAT: SIM fallback — net_pnl uses a capped flat fee estimate; verify the edge is not fee-only before APPLY.' : 'Source: real Meridian outcomes.'}`
         const mode = T.mode === 'apply' && spot.n >= (T.realSampleMin ?? 100) ? 'apply' : 'shadow'
         const evt = {
           created_at: now, param_path: paramPath, old_value: current, new_value: next, delta: next - current,

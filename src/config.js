@@ -230,13 +230,18 @@ const DEFAULTS = {
     // Phase 4B — bounded auto-tuner. Ships OFF. Proposes damped, clamped deltas only when
     // reconciled per-strategy evidence is statistically significant. SHADOW = propose+log+notify
     // (no write); APPLY (write user-config) requires explicit opt-in + per-event human approval.
+    // 2026-06-30 corrections (validated via preview-tuner.js on 435 real closes): the tuner now
+    // (1) drives off REAL outcomes (feedback_outcomes) when a strategy has >= minSamplesPerStrategy,
+    // falling back to SIM only below that; (2) refuses to WIDEN a strategy whose mean P&L < meanFloorForWiden
+    // — real spot was 63% WR but −0.18% mean (fat loss tail), so WR-alone would wrongly widen a net loser.
     autoTuner: {
       enabled: false,           // master switch — OFF until there is real per-strategy data
       mode: 'shadow',           // 'shadow' (propose only) | 'apply' (write, still gated)
       intervalCron: '0 */1 * * *',
-      minSamplesPerStrategy: 50,  // SHADOW propose floor
+      minSamplesPerStrategy: 50,  // SHADOW propose floor + "trust REAL over SIM" threshold
       realSampleMin: 100,         // APPLY floor (per strategy)
       breakEvenWinRate: 0.50,
+      meanFloorForWiden: 0,       // never WIDEN a strategy whose mean net P&L is below this (loss-tail guard)
       hysteresisBand: 0.05,       // Wilson bound must clear break-even by this margin
       wilsonZ: 1.96,              // stricter than the gate's 1.0
       maxStepsPerCycle: 1,
