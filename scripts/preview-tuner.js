@@ -56,9 +56,36 @@ const sim = decide(spotFrom('sim'), 'SIM spot')
 console.log('\n━━ what it SHOULD use (REAL / feedback_outcomes) ━━')
 const real = decide(spotFrom('real'), 'REAL spot')
 
+// ── PROPOSED FIXED LOGIC: real-preferred source + mean-P&L guard on widen ───────
+// The fix has TWO parts: (1) prefer REAL outcomes when n>=minSamples (else sim fallback);
+// (2) a mean-guard — only WIDEN if mean_pnl >= meanFloor, so a high-WR-but-losing strategy
+// (many small wins, fat loss tail) is NOT widened. Tighten needs no mean-guard (safe regardless).
+const meanFloor = 0   // don't widen a strategy whose average trade loses money
+function decideFixed() {
+  const rs = spotFrom('real'), ss = spotFrom('sim')
+  const useReal = rs.n >= minSamples
+  const s = useReal ? rs : ss
+  const src = useReal ? 'REAL' : 'sim-fallback'
+  const wr = s.n ? s.wins/s.n : 0
+  const { lb, ub } = wilson(wr, s.n)
+  let dir = 0, why = 'hold (within dead-band)'
+  if (s.n < minSamples) why = `n=${s.n} < minSamples — no act`
+  else if (lb > be + band) {
+    if ((s.mean ?? 0) >= meanFloor) { dir = +1; why = `WIDEN: WR LB ${fmt(lb)}>${be+band} AND mean ${fmt(s.mean)}>=${meanFloor}` }
+    else { dir = 0; why = `HOLD (mean-guard): WR LB ${fmt(lb)} would widen BUT mean ${fmt(s.mean)}<${meanFloor} — refuse to widen a losing strategy` }
+  } else if (ub < be - band) { dir = -1; why = `tighten: WR UB ${fmt(ub)}<${be-band}` }
+  const next = dir ? Math.round(Math.min(bounds.max, Math.max(bounds.min, current + dir*bounds.step))*1000)/1000 : current
+  console.log(`FIXED spot [src=${src}]: n=${s.n} WR=${Math.round(wr*100)}% mean=${fmt(s.mean)}% Wilson[${fmt(lb)},${fmt(ub)}]`)
+  console.log(`  → proposal: ${dir? `${current} → ${next}` : 'no change'}  (${why})`)
+  return { dir, next }
+}
+console.log('\n━━ PROPOSED FIXED LOGIC (real-preferred + mean-guard) ━━')
+const fixed = decideFixed()
+
 console.log('\n━━ VERDICT ━━')
 if (!real.n) console.log('• No real spot outcomes — only sim available.')
-else if (sim.dir === real.dir) console.log(`• SIM and REAL AGREE (both ${sim.dir>0?'widen':sim.dir<0?'tighten':'hold'}) → enabling shadow as-is is safe; proposal is robust.`)
-else console.log(`• SIM says "${sim.dir>0?'widen':sim.dir<0?'tighten':'hold'}" but REAL says "${real.dir>0?'widen':real.dir<0?'tighten':'hold'}" → tuner drives off the WRONG signal. Redirect strategyStats() to feedback_outcomes BEFORE enabling.`)
-console.log('• NOTE: volatility had AUC 0.068 (weak) on real outcomes — spotMaxVolatility may be a low-value knob regardless. Consider whitelisting a stronger lever (age/tvl-mcap thresholds) for future tuner versions.')
+else if (sim.dir !== real.dir) console.log(`• CURRENT logic is WRONG: SIM says "${sim.dir>0?'widen':sim.dir<0?'tighten':'hold'}" but REAL says "${real.dir>0?'widen':real.dir<0?'tighten':'hold'}" — drives off the wrong source.`)
+console.log(`• FIXED logic proposal: ${fixed.dir? (fixed.dir>0?'widen':'tighten')+` → ${fixed.next}` : 'HOLD'}.`)
+console.log(`• KEY CHECK: real spot WR is high (${Math.round(real.wr*100)}%) but mean is ${fmt(spotFrom('real').mean)}% — the mean-guard SHOULD block the widen. If FIXED shows HOLD, the guard works correctly.`)
+console.log('• NOTE: volatility had AUC 0.068 (weak) on real outcomes — spotMaxVolatility is a low-value knob. A stronger lever (age/tvl-mcap thresholds) is a future tuner-whitelist candidate.')
 console.log('\ndone.')
