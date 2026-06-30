@@ -452,8 +452,14 @@ function evaluatePool(metrics = {}, strategy = null) {
   const pool = {
     pool: metrics.pool_address ?? metrics.pool ?? null,
     base: { mint: metrics.token_mint ?? metrics.mint ?? null, symbol: metrics.token_symbol ?? metrics.symbol ?? '?' },
-    volatility: metrics.volatility, fee_active_tvl_ratio: metrics.fee_active_tvl_ratio,
-    tvl: metrics.tvl, mcap: metrics.mcap, holders: metrics.holders, token_age_hours: metrics.token_age_hours,
+    // Accept Meridian's buildArgusFeatures() field names as aliases so Meridian can send its
+    // feature object verbatim (fee_tvl_ratio/entry_tvl/entry_mcap/entry_holders|holder_count).
+    volatility:           metrics.volatility,
+    fee_active_tvl_ratio: metrics.fee_active_tvl_ratio ?? metrics.fee_tvl_ratio,
+    tvl:                  metrics.tvl   ?? metrics.entry_tvl,
+    mcap:                 metrics.mcap  ?? metrics.entry_mcap,
+    holders:              metrics.holders ?? metrics.entry_holders ?? metrics.holder_count,
+    token_age_hours:      metrics.token_age_hours,
     bin_step: metrics.bin_step, organic_score: metrics.organic_score,
     price_change_pct: metrics.price_change_pct, volume_change_pct: metrics.volume_change_pct,
     price_vs_ath_pct: metrics.price_vs_ath_pct, dev_sold_all: metrics.dev_sold_all,
