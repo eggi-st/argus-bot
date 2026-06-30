@@ -315,6 +315,9 @@ async function updateOpenPositions() {
           hold_minutes:      holdMinutes,
           close_reason:      closeReason,
           win:               finalNetPnlPct > 0,
+          // no_fill = bid never executed (fillFraction=0). Tracked separately from wins/losses
+          // so win_rate only covers positions where capital was actually deployed.
+          no_fill:           fillFraction === 0,
         })
 
         bus.emitSafe('ui_update', {

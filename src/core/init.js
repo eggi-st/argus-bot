@@ -63,6 +63,7 @@ async function init() {
   const learning = require('../learning/index')
   learning.init()
   require('../learning/reconcile').init()
+  require('../learning/exit-stats').init()
   require('../intelligence/diagnostics').init()
   require('../ai/system-report').init()
   require('../learning/auto-tuner').init()

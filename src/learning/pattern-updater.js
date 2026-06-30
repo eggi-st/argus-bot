@@ -63,17 +63,35 @@ function resolveConditionBucket(positionId, source, conditionBucketOverride) {
   return row?.condition_bucket ?? null
 }
 
-function updatePattern(positionId, { netPnlPct, strategy, win, source, conditionBucketOverride }) {
+function updatePattern(positionId, { netPnlPct, strategy, win, no_fill, source, conditionBucketOverride }) {
   const bucket = resolveConditionBucket(positionId, source, conditionBucketOverride)
   if (!bucket) return
+
+  const { volatility_bucket, fee_bucket, regime, age_bucket } = parseBucket(bucket)
+  const now = new Date().toISOString()
+
+  // No-fill = bid never executed (fillFraction=0). Do NOT count as a win or loss — SOL was
+  // never deployed. Only increment nofill_count so win_rate stays accurate for filled positions.
+  if (no_fill) {
+    db.prepare(`
+      INSERT INTO pattern_library
+        (updated_at, volatility_bucket, regime, strategy, fee_bucket, age_bucket,
+         win_rate, mean_pnl_net, sample_count, active, wins, ema_win_rate, nofill_count)
+      VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 1)
+      ON CONFLICT(volatility_bucket, regime, strategy, fee_bucket, age_bucket) DO UPDATE SET
+        updated_at   = excluded.updated_at,
+        nofill_count = COALESCE(nofill_count, 0) + 1
+    `).run(now, volatility_bucket, regime, strategy, fee_bucket, age_bucket)
+    console.log(`[Pattern] ${volatility_bucket}×${regime}×${fee_bucket}×${age_bucket}×${strategy}: no_fill (nofill_count+1)`)
+    return
+  }
+
   if (!Number.isFinite(netPnlPct)) {
     console.warn('[Pattern] Invalid netPnlPct — skipping pattern update')
     return
   }
 
-  const { volatility_bucket, fee_bucket, regime, age_bucket } = parseBucket(bucket)
   const winVal = win ? 1.0 : 0.0
-  const now    = new Date().toISOString()
 
   // Read config fresh so runtime changes to promotionThreshold / emaAlpha take effect
   // without restart. reconcile.js is the authoritative recompute; this is the fast cache.
@@ -95,6 +113,7 @@ function init() {
         netPnlPct:               payload.net_pnl_pct ?? 0,
         strategy:                payload.strategy,
         win:                     !!payload.win,
+        no_fill:                 !!payload.no_fill,
         source:                  payload.source,
         conditionBucketOverride: payload.condition_bucket ?? null,
       })

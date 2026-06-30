@@ -455,6 +455,15 @@
         <div id="tech-screens"></div>
       </div>
     </div>
+
+    <!-- Exit-Technique Performance (Tier 1-C) -->
+    <div class="card">
+      <div class="card-title">Exit Technique Performance <span id="exit-status" style="font-weight:400;color:var(--muted)"></span>
+        <button class="btn btn-gray" onclick="loadExitTechniques()" style="font-size:10px;padding:3px 9px">↻</button>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:12px">Per strategi: exit mana yang menutup posisi, seberapa sering, dan hasilnya. <span style="color:var(--muted2)">net_target = TP ideal · max_hold = ride timer (sering flat) · il_stop = safety net · price_ran_up = bid tak terisi (miss)</span></div>
+      <div id="exit-tech-body"></div>
+    </div>
   </div>
 
   <!-- ── Hivemind ────────────────────────────────────────────────────────────── -->
@@ -620,7 +629,7 @@ async function checkAuth() {
 const PAGE_LOADERS = {
   dash:     () => { loadDecisions(); loadDryRunSummary(); loadRisk(); loadScanStatus() },
   dryrun:   () => loadDryRun(),
-  patterns: () => { loadPatternLibrary(); loadTechniques() },
+  patterns: () => { loadPatternLibrary(); loadTechniques(); loadExitTechniques() },
   hivemind: () => loadHivemind(),
   wallet:   () => loadWalletActions(),
   log:      () => { loadRejections(); loadFeedbackHistory() },
@@ -685,6 +694,7 @@ function openDrModal(id) {
         ${cell('Vol Δ', ind.volume_change_pct!=null?pct(Math.round(ind.volume_change_pct)):'—')}
         ${cell('Price Δ', ind.price_change_pct!=null?pct(Math.round(ind.price_change_pct)):'—')}
         ${cell('Bucket', (p.condition_bucket||'—').replace(/_/g,' '))}
+        ${(()=>{ const conf=p.confidence!=null?Math.round(p.confidence*100):null; const cc=conf==null?'var(--muted)':conf>=70?'var(--green)':conf>=50?'#e8c46a':'#e07070'; return cell('Confidence', conf!=null?`<span style="font-weight:700;color:${cc}">${conf}%</span>`:'—') })()}
       </div>
       <div class="dr-m-sect">Market / WHO — nyata (dari screener)</div>
       <div class="dr-m-grid">
@@ -694,7 +704,15 @@ function openDrModal(id) {
         ${cell('Risk', ind.risk_level??'—')}
         ${cell('Smart money', ind.smart_money_confirmed?'✓':'—')}
         ${cell('Dev sold', ind.dev_sold_all===true?'⚠ ya':(ind.dev_sold_all===false?'tidak':'—'))}
-      </div>`
+      </div>
+      ${p.exit_metrics ? `
+      <div class="dr-m-sect">Dinamika posisi (simulasi)</div>
+      <div class="dr-m-grid">
+        ${cell('Peak PnL', p.exit_metrics.peak_pnl_pct!=null?pct(+(p.exit_metrics.peak_pnl_pct).toFixed(2)):'—', p.exit_metrics.peak_pnl_pct!=null?cPct(p.exit_metrics.peak_pnl_pct):'')}
+        ${cell('Price move', p.exit_metrics.price_move_pct!=null?pct(+(p.exit_metrics.price_move_pct).toFixed(2)):'—', p.exit_metrics.price_move_pct!=null?cPct(p.exit_metrics.price_move_pct):'')}
+        ${cell('Fill fraction', p.exit_metrics.fill_fraction!=null?Math.round(p.exit_metrics.fill_fraction*100)+'%':'—')}
+        ${cell('Slip cost', p.exit_metrics.slip_cost_pct!=null?pct(+(p.exit_metrics.slip_cost_pct).toFixed(3)):'—')}
+      </div>` : ''}`
   }).catch(() => { body.innerHTML = '<div class="empty">Gagal memuat.</div>' })
 }
 
@@ -858,7 +876,7 @@ const EXIT_COLOR = { stop_loss:'var(--red)', take_profit:'var(--green)', max_hol
 const EXIT_LABEL = { stop_loss:'SL', take_profit:'TP', max_hold:'time', ttl_expired:'TTL' }
 
 function loadDryRun() {
-  apiFetch('/api/dry-run?limit=40').then(r => r.json()).then(d => {
+  apiFetch('/api/dry-run?limit=100').then(r => r.json()).then(d => {
     const s = d.stats || {}
 
     // Stat cards
@@ -914,9 +932,9 @@ function loadDryRun() {
     if (!closed.length) {
       closedEl.innerHTML = '<div class="empty">Belum ada posisi closed.</div>'
     } else {
-      const COLS = '95px 78px 68px 70px 56px 46px 98px 64px'
-      const header = `<div class="tbl-head" style="grid-template-columns:${COLS}"><span>Token</span><span>Strategy</span><span title="Harga + fee − slippage (hasil akhir)">Net P&L</span><span title="P&L dari pergerakan harga saja / impermanent loss — belum termasuk fee">Harga/IL</span><span title="Pendapatan fee LP (capped ~10%)">Fees</span><span>Hold</span><span>Opened</span><span>Exit</span></div>`
-      const rows = closed.slice(0, 30).map(p => {
+      const COLS = '95px 78px 44px 68px 70px 56px 46px 98px 64px'
+      const header = `<div class="tbl-head" style="grid-template-columns:${COLS}"><span>Token</span><span>Strategy</span><span title="Confidence score dari intelligence engine saat keputusan dibuat">Conf</span><span title="Harga + fee − slippage (hasil akhir)">Net P&L</span><span title="P&L dari pergerakan harga saja / impermanent loss — belum termasuk fee">Harga/IL</span><span title="Pendapatan fee LP (capped ~10%)">Fees</span><span>Hold</span><span>Opened</span><span>Exit</span></div>`
+      const rows = closed.slice(0, 100).map(p => {
         const tok = `<b>${p.token_symbol||p.token_mint?.slice(0,8)||'?'}</b>`
         // No-fill: single-sided bid never entered range → no IL, no fees, net 0
         const noFill = p.net_pnl_pct === 0 && p.gross_pnl_pct === 0
@@ -935,7 +953,10 @@ function loadDryRun() {
           ? `<span class="badge badge-gray" style="font-size:10px">no fill</span>`
           : `<span style="color:${EXIT_COLOR[exitR]||'var(--muted)'};font-weight:600">${EXIT_LABEL[exitR]||'?'}${inferred ? '<span style="opacity:.4">?</span>' : ''}</span>`
         const openedStr = p.opened_at ? new Date(p.opened_at).toLocaleString('id-ID',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—'
-        return `<div class="tbl-row" style="grid-template-columns:${COLS};cursor:pointer" onclick="openDrModal(${p.id})" title="Klik untuk detail lengkap">${tok}<span><span class="badge ${STRAT_BADGE[p.strategy]||'badge-gray'}">${STRAT_LABEL[p.strategy]||p.strategy}</span></span>${pnlEl}${gross}${feeEl}<span style="color:var(--muted)">${p.hold_minutes != null ? p.hold_minutes+'m' : '—'}</span><span style="color:var(--muted);font-size:11px">${openedStr}</span>${exitEl}</div>`
+        const conf = p.confidence != null ? Math.round(p.confidence * 100) : null
+        const confColor = conf == null ? 'var(--muted)' : conf >= 70 ? 'var(--green)' : conf >= 50 ? '#e8c46a' : '#e07070'
+        const confEl = conf != null ? `<span style="font-size:11px;font-weight:600;color:${confColor}">${conf}%</span>` : `<span style="color:var(--muted)">—</span>`
+        return `<div class="tbl-row" style="grid-template-columns:${COLS};cursor:pointer" onclick="openDrModal(${p.id})" title="Klik untuk detail lengkap">${tok}<span><span class="badge ${STRAT_BADGE[p.strategy]||'badge-gray'}">${STRAT_LABEL[p.strategy]||p.strategy}</span></span>${confEl}${pnlEl}${gross}${feeEl}<span style="color:var(--muted)">${p.hold_minutes != null ? p.hold_minutes+'m' : '—'}</span><span style="color:var(--muted);font-size:11px">${openedStr}</span>${exitEl}</div>`
       }).join('')
       closedEl.innerHTML = `<div class="tbl-wrap">${header + rows}</div>`
     }
@@ -948,9 +969,10 @@ function loadPatternLibrary() {
     const patterns = d.patterns || []
     const active  = patterns.filter(p => p.active)
     const pending = patterns.filter(p => !p.active)
-    const total   = patterns.reduce((s, p) => s + (p.sample_count || 0), 0)
+    const total      = patterns.reduce((s, p) => s + (p.sample_count || 0), 0)
+    const totalNofill = patterns.reduce((s, p) => s + (p.nofill_count || 0), 0)
     const pl = document.getElementById('pl-status')
-    if (pl) pl.textContent = `${active.length} aktif · ${pending.length} calibrating · ${total} samples`
+    if (pl) pl.textContent = `${active.length} aktif · ${pending.length} calibrating · ${total} filled · ${totalNofill} no-fill`
     const emEl = document.getElementById('pl-empty')
     if (!patterns.length) { if (emEl) emEl.style.display = 'block'; return }
     if (emEl) emEl.style.display = 'none'
@@ -977,7 +999,8 @@ function loadPatternLibrary() {
               <span style="color:${pnlColor}">${avgPnl != null ? (p.mean_pnl_net >= 0 ? '+' : '') + avgPnl + '%' : '—'}</span>
             </div>
             <div class="pat-wr-bar"><div class="pat-wr-fill" style="width:${wr ?? 0}%;background:${wrColor}"></div></div>
-            <div style="font-size:.6rem;color:var(--muted2);margin-top:5px">N=${p.sample_count} · ${gap || 'updated ' + new Date(p.updated_at).toLocaleDateString('id-ID')}</div>
+            ${(()=>{ const nf=p.nofill_count||0; const total=p.sample_count+nf; const nfRate=total>0?Math.round(nf/total*100):0; return nf>0?`<div style="font-size:.6rem;color:var(--muted2);margin-top:2px">miss ${nfRate}% (${nf} no-fill / ${total} attempts)</div>`:'' })()}
+            <div style="font-size:.6rem;color:var(--muted2);margin-top:5px">N=${p.sample_count} filled · ${gap || 'updated ' + new Date(p.updated_at).toLocaleDateString('id-ID')}</div>
           </div>`
         }).join('') + '</div>'
       }
@@ -1082,6 +1105,46 @@ function loadTechniques() {
   }).catch(() => {})
 }
 function f2num(x){ return x==null ? '—' : (x>0?'+':'')+x.toFixed(2) }
+
+// ── Exit-Technique Performance (Tier 1-C) ──────────────────────────────────────
+const EXIT_TECH_COLOR = { net_target:'var(--green)', il_stop:'var(--red)', max_hold:'#e8c46a',
+  trailing_tp:'var(--green)', price_ran_up:'var(--muted)', ttl_expired:'var(--muted2)', rsi_reversal:'var(--indigo)' }
+function loadExitTechniques() {
+  apiFetch('/api/exit-techniques').then(r => r.json()).then(d => {
+    const exits = d.exits || []
+    const st = document.getElementById('exit-status')
+    if (st) st.textContent = exits.length ? `${exits.length} rows` : ''
+    const body = document.getElementById('exit-tech-body')
+    if (!body) return
+    if (!exits.length) { body.innerHTML = '<div class="empty">Belum ada outcome exit — reconcile tiap 6 jam.</div>'; return }
+    // Group by strategy
+    const byStrat = {}
+    for (const e of exits) (byStrat[e.strategy] ||= []).push(e)
+    body.innerHTML = Object.entries(byStrat).map(([strat, rows]) => {
+      const total = rows.reduce((s,e)=>s+(e.sample_count||0)+(e.nofill_count||0),0)
+      const inner = rows.map(e => {
+        const col = EXIT_TECH_COLOR[e.exit_technique] || 'var(--muted)'
+        const wr = e.win_rate != null ? Math.round(e.win_rate*100) : null
+        const wrStr = wr != null ? `<span style="color:${wr>=60?'var(--green)':wr>=40?'#e8c46a':'var(--red)'};font-weight:700">${wr}%</span>` : '<span style="color:var(--muted)">miss</span>'
+        const mean = e.mean_pnl_net != null ? `<span style="color:${e.mean_pnl_net>=0?'var(--green)':'var(--red)'}">${e.mean_pnl_net>=0?'+':''}${e.mean_pnl_net}%</span>` : '<span style="color:var(--muted)">—</span>'
+        const nf = e.nofill_count>0 ? `<span style="color:var(--muted2)" title="bid tak terisi">·${e.nofill_count} miss</span>` : ''
+        const hold = e.avg_hold_minutes != null ? `${e.avg_hold_minutes}m` : '—'
+        return `<div style="display:grid;grid-template-columns:108px 1fr 46px 60px 52px;gap:8px;align-items:center;padding:4px 0;font-size:11px">
+          <span style="color:${col};font-weight:600">${e.exit_technique}</span>
+          <div style="height:6px;background:var(--bg3);border-radius:3px;overflow:hidden"><div style="height:100%;width:${e.share_pct||0}%;background:${col};opacity:.7"></div></div>
+          <span style="color:var(--muted2);text-align:right">${e.share_pct!=null?e.share_pct+'%':'—'}</span>
+          <span style="text-align:right">${wrStr} <span style="color:var(--muted2);font-size:9px">n${e.sample_count}</span></span>
+          <span style="text-align:right">${mean}</span>
+        </div><div style="font-size:9px;color:var(--muted2);margin:-2px 0 4px 108px">hold ${hold} ${nf}</div>`
+      }).join('')
+      return `<div style="margin-bottom:16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span class="badge ${STRAT_BADGE[strat]||'badge-gray'}">${STRAT_LABEL[strat]||strat}</span>
+          <span style="color:var(--muted2);font-size:10px">${total} closes</span>
+        </div>${inner}</div>`
+    }).join('')
+  }).catch(() => {})
+}
 
 // ── Hivemind ───────────────────────────────────────────────────────────────────
 function loadHivemind() {

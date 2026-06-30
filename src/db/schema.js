@@ -194,6 +194,10 @@ function migrateSchema() {
     // even when win_rate looks acceptable. Computed by reconcile.js (authoritative path).
     `ALTER TABLE pattern_library ADD COLUMN avg_win_pnl REAL`,
     `ALTER TABLE pattern_library ADD COLUMN avg_loss_pnl REAL`,
+    // No-fill tracking (2026-06-30): bids that never executed (fillFraction=0) must be counted
+    // separately from wins/losses — they represent missed opportunities, not losses.
+    // win_rate now only covers filled positions; nofill_count tracks entry misses.
+    `ALTER TABLE pattern_library ADD COLUMN nofill_count INTEGER DEFAULT 0`,
     // Wallet lifecycle (2026-06-29): state machine (active→cooling→stale→retired) driven by
     // last_seen staleness + wallet_actions activity. quality_score reflects how often this
     // wallet's LP entries correlated with profitable Argus outcomes. Default 0.5 = neutral.
@@ -315,6 +319,33 @@ function migrateSchema() {
     `)
   } catch (e) {
     if (!e.message?.includes('already exists')) console.warn('[Schema] tuning_events:', e.message)
+  }
+
+  // exit_technique_stats table — Tier 1-C exit-technique learning. Secondary rollup of closed
+  // dry-run outcomes grouped by (strategy × exit_technique), recomputed by exit-stats.js. Makes
+  // exit quality VISIBLE (which exit wins per strategy) — the structural blind spot where
+  // exit_technique was recorded per close but never aggregated. Additive; does NOT touch the
+  // primary pattern_library learner. win_rate/nofill computed on FILLED positions only.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS exit_technique_stats (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        updated_at      TEXT    NOT NULL,
+        strategy        TEXT    NOT NULL,
+        exit_technique  TEXT    NOT NULL,
+        sample_count    INTEGER DEFAULT 0,
+        wins            INTEGER DEFAULT 0,
+        win_rate        REAL,
+        mean_pnl_net    REAL,
+        avg_hold_minutes REAL,
+        nofill_count    INTEGER DEFAULT 0,
+        share_pct       REAL,
+        UNIQUE(strategy, exit_technique)
+      );
+      CREATE INDEX IF NOT EXISTS idx_exitstats_strat ON exit_technique_stats(strategy);
+    `)
+  } catch (e) {
+    if (!e.message?.includes('already exists')) console.warn('[Schema] exit_technique_stats:', e.message)
   }
 
   try {
@@ -586,16 +617,16 @@ function recordWalletAction(data) {
  * feeBucket and ageBucket are the two new dimensions added in the 5-dim schema migration.
  */
 function recordPatternReconciled(vb, regime, strategy, feeBucket, ageBucket, d) {
-  return getStmt('reconcilePattern5d', `
+  return getStmt('reconcilePattern5d_nofill', `
     INSERT INTO pattern_library
       (updated_at, volatility_bucket, regime, strategy, fee_bucket, age_bucket,
        win_rate, mean_pnl_net, sample_count, active, wins, last_reconciled_at,
        source, live_win_rate, live_mean_pnl, live_sample_count, sim_win_rate, sim_sample_count, reality_gap,
-       avg_win_pnl, avg_loss_pnl)
+       avg_win_pnl, avg_loss_pnl, nofill_count)
     VALUES (@updated_at, @vb, @regime, @strategy, @fee_bucket, @age_bucket,
        @win_rate, @mean_pnl_net, @sample_count, @active, @wins, @last_reconciled_at,
        @source, @live_win_rate, @live_mean_pnl, @live_sample_count, @sim_win_rate, @sim_sample_count, @reality_gap,
-       @avg_win_pnl, @avg_loss_pnl)
+       @avg_win_pnl, @avg_loss_pnl, @nofill_count)
     ON CONFLICT(volatility_bucket, regime, strategy, fee_bucket, age_bucket) DO UPDATE SET
       updated_at         = excluded.updated_at,
       win_rate           = excluded.win_rate,
@@ -612,11 +643,12 @@ function recordPatternReconciled(vb, regime, strategy, feeBucket, ageBucket, d) 
       sim_sample_count   = excluded.sim_sample_count,
       reality_gap        = excluded.reality_gap,
       avg_win_pnl        = excluded.avg_win_pnl,
-      avg_loss_pnl       = excluded.avg_loss_pnl
+      avg_loss_pnl       = excluded.avg_loss_pnl,
+      nofill_count       = excluded.nofill_count
   `).run({ vb, regime, strategy, fee_bucket: feeBucket, age_bucket: ageBucket,
     source: null, live_win_rate: null, live_mean_pnl: null, live_sample_count: 0,
     sim_win_rate: null, sim_sample_count: 0, reality_gap: null,
-    avg_win_pnl: null, avg_loss_pnl: null, ...d })
+    avg_win_pnl: null, avg_loss_pnl: null, nofill_count: 0, ...d })
 }
 
 /**

@@ -113,6 +113,42 @@ function calcTtlMinutes(pool) {
 }
 
 /**
+ * Liquidity-concentration confidence modifier (Tier 1-B). Returns a multiplicative factor
+ * in [floor, 1] that softly discounts pools sitting in the riskier liquidity zone — high
+ * tvl/mcap (exit-liquidity trap) or high tvl-per-holder (concentrated liquidity vs community).
+ * Applied ONLY to pools that already passed the hard antirug gate, so it adds gradient without
+ * loosening safety. Both terms are empirically grounded (winners vs catastrophes, 84 closes).
+ */
+function liquidityModifier(pool, cfg) {
+  const m = cfg.learning?.liquidityModifier
+  if (!m || m.enabled === false) return { factor: 1, note: null }
+  const fin = x => (x != null && Number.isFinite(Number(x))) ? Number(x) : null
+  const tvl = fin(pool.tvl), mcap = fin(pool.mcap), holders = fin(pool.holders)
+  let factor = 1
+  const notes = []
+  if (tvl != null && mcap != null && mcap > 0) {
+    const ratio = tvl / mcap
+    if (ratio > m.tvlMcapClean) {
+      const span = Math.max(1e-9, m.tvlMcapGate - m.tvlMcapClean)
+      const frac = Math.min(1, (ratio - m.tvlMcapClean) / span)
+      factor *= (1 - frac * m.tvlMcapMaxPenalty)
+      notes.push(`tvl/mcap=${ratio.toFixed(3)}`)
+    }
+  }
+  if (tvl != null && holders != null && holders > 0) {
+    const tph = tvl / holders
+    if (tph > m.tvlPerHolderClean) {
+      const span = Math.max(1e-9, m.tvlPerHolderHigh - m.tvlPerHolderClean)
+      const frac = Math.min(1, (tph - m.tvlPerHolderClean) / span)
+      factor *= (1 - frac * m.tvlPerHolderMaxPenalty)
+      notes.push(`tvl/holder=${tph.toFixed(0)}`)
+    }
+  }
+  factor = Math.max(m.floor ?? 0.8, factor)
+  return { factor, note: notes.length ? notes.join(' ') : null }
+}
+
+/**
  * Resolve the screening config for a pipeline profile.
  * The base `screening` block is the default / bid_ask profile; named profiles
  * shallow-override it (all screening values are scalar, so a shallow merge is exact).
@@ -226,6 +262,15 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
     console.log(`[IC] Entry indicator confirmed (${pool.entry_indicator.technique}): ${pool.base?.symbol} → conf boosted to ${(confidence * 100).toFixed(0)}%`)
   }
 
+  // Liquidity-concentration penalty (Tier 1-B) — soft discount within the antirug-allowed zone.
+  const liqMod = liquidityModifier(pool, cfg)
+  if (liqMod.factor < 1) {
+    confidence = confidence * liqMod.factor
+    console.log(`[IC] Liquidity penalty ×${liqMod.factor.toFixed(2)} (${liqMod.note}): ${pool.base?.symbol} → conf ${(confidence * 100).toFixed(0)}%`)
+  }
+
+  const tvlMcapRatio = (pool.tvl != null && pool.mcap > 0) ? Math.round((pool.tvl / pool.mcap) * 10000) / 10000 : null
+  const tvlPerHolder = (pool.tvl != null && pool.holders > 0) ? Math.round((pool.tvl / pool.holders) * 100) / 100 : null
   const indicators = {
     volatility: pool.volatility,
     fee_active_tvl_ratio: pool.fee_active_tvl_ratio,
@@ -242,6 +287,9 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
     dex_boost: pool.dex_boost ?? null,
     bin_step: pool.bin_step,
     tvl: pool.tvl,
+    mcap: pool.mcap ?? null,
+    tvl_mcap_ratio: tvlMcapRatio,
+    tvl_per_holder: tvlPerHolder,
     fee_window: pool.fee_window,
     volume_window: pool.volume_window,
   }

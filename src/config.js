@@ -174,6 +174,22 @@ const DEFAULTS = {
     emaAlpha: 0.15,            // EMA update weight for recent outcomes (scoring only)
     baseRateFallback: 0.50,    // base rate used until baseRateMinSamples real outcomes exist
     baseRateMinSamples: 30,    // min closed outcomes before a strategy's own base rate is trusted
+    // Liquidity-concentration confidence modifier (2026-06-30). Soft penalty for pools that PASS
+    // the antirug gate but sit in the riskier liquidity zone. Empirically (84 dry-run closes):
+    // catastrophes had ~2× TVL and ~2.3× TVL/holder vs winners (AUC separation power 0.22/0.21).
+    // Does NOT loosen the hard antirug gate — only adds a gradient WITHIN the allowed zone, so a
+    // clean pool (low tvl/mcap, low tvl/holder) keeps full confidence and a borderline one is
+    // discounted. Set enabled:false to disable. Tune as real-outcome data confirms the thresholds.
+    liquidityModifier: {
+      enabled: true,
+      tvlMcapClean: 0.05,        // tvl/mcap at/below this = no penalty (forensic winners ~0.05)
+      tvlMcapGate: 0.10,         // antirug hard-reject boundary; penalty ramps linearly clean→gate
+      tvlMcapMaxPenalty: 0.10,   // max confidence cut from the tvl/mcap term (×0.90)
+      tvlPerHolderClean: 20,     // tvl-per-holder at/below this = no penalty (winners med ~16)
+      tvlPerHolderHigh: 40,      // at/above this = max penalty (catastrophes med ~39)
+      tvlPerHolderMaxPenalty: 0.12,
+      floor: 0.80,               // never cut confidence below this multiple (cap total at −20%)
+    },
     // Phase 3a-ii — promotion + reconciliation.
     // 45: learning engages in a reasonable window; the deterministic gate + Wilson lower-bound
     // (which widens for small N and re-evaluates continuously) carry the ongoing statistical

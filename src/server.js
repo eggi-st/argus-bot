@@ -353,8 +353,10 @@ app.get('/api/dry-run', (req, res) => {
              dr.pool_address, dr.strategy, dr.entry_price_sol, dr.exit_price_sol,
              dr.sol_amount, dr.range_bins, dr.gross_pnl_pct, dr.net_pnl_pct,
              dr.simulated_fee_pct, dr.hold_minutes, dr.close_reason,
-             dr.status, dr.outcome_valid
+             dr.status, dr.outcome_valid,
+             d.confidence
       FROM dry_run_positions dr
+      LEFT JOIN decisions d ON d.id = dr.decision_id
       ${where}
       ORDER BY dr.opened_at DESC LIMIT ?
     `).all(...params)
@@ -395,11 +397,28 @@ app.get('/api/pattern-library', (req, res) => {
     const rows = db.prepare(`
       SELECT volatility_bucket, regime, strategy, win_rate, mean_pnl_net,
              sample_count, active, updated_at,
-             source, live_sample_count, sim_sample_count, reality_gap
+             source, live_sample_count, sim_sample_count, reality_gap,
+             nofill_count
       FROM pattern_library
       ORDER BY sample_count DESC, active DESC
     `).all()
     res.json({ patterns: rows, total: rows.length })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Tier 1-C — exit-technique effectiveness rollup. Surfaces which exit (net_target / il_stop /
+// max_hold / trailing_tp / price_ran_up) fires how often per strategy and how it performs.
+app.get('/api/exit-techniques', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT strategy, exit_technique, sample_count, wins, win_rate, mean_pnl_net,
+             avg_hold_minutes, nofill_count, share_pct, updated_at
+      FROM exit_technique_stats
+      ORDER BY strategy, share_pct DESC, sample_count DESC
+    `).all()
+    res.json({ exits: rows, total: rows.length })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

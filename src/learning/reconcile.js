@@ -18,7 +18,8 @@ function reconcilePatterns() {
   const now = new Date().toISOString()
 
   // SIM rollup — dry-run outcomes, keyed by the decision's bucket (the legacy source).
-  // win_pnl_sum / loss_pnl_sum are conditional totals used to compute per-bucket avg_win/loss_pnl.
+  // EXCLUDES no-fills (net=0 AND gross=0) so win_rate only covers positions where capital
+  // was actually deployed. No-fills are tracked separately in nofill_count below.
   const simRows = db.prepare(`
     SELECT d.condition_bucket AS bucket, dr.strategy AS strategy,
            COUNT(*) AS n,
@@ -29,6 +30,18 @@ function reconcilePatterns() {
     FROM dry_run_positions dr
     JOIN decisions d ON d.id = dr.decision_id
     WHERE dr.status = 'closed' AND dr.outcome_valid = 1 AND d.condition_bucket IS NOT NULL
+      AND NOT (dr.net_pnl_pct = 0 AND dr.gross_pnl_pct = 0)
+    GROUP BY d.condition_bucket, dr.strategy
+  `).all()
+
+  // No-fill rollup — bids that never executed. Counted per bucket to expose "entry miss rate"
+  // without polluting win_rate. nofill_rate = nofill_count / (sample_count + nofill_count).
+  const noFillRows = db.prepare(`
+    SELECT d.condition_bucket AS bucket, dr.strategy AS strategy, COUNT(*) AS n
+    FROM dry_run_positions dr
+    JOIN decisions d ON d.id = dr.decision_id
+    WHERE dr.status = 'closed' AND dr.outcome_valid = 1 AND d.condition_bucket IS NOT NULL
+      AND dr.net_pnl_pct = 0 AND dr.gross_pnl_pct = 0
     GROUP BY d.condition_bucket, dr.strategy
   `).all()
 
@@ -46,7 +59,7 @@ function reconcilePatterns() {
     GROUP BY condition_bucket, strategy
   `).all()
 
-  // Merge both rollups keyed on all 5 parsed dimensions — different raw condition_bucket
+  // Merge all rollups keyed on all 5 parsed dimensions — different raw condition_bucket
   // strings can map to the same (vol, regime, fee, age), so accumulate by parsed key.
   const merged = new Map()
   const addRow = (r, kind) => {
@@ -55,9 +68,10 @@ function reconcilePatterns() {
     const key = `${volatility_bucket}::${regime}::${fee_bucket}::${age_bucket}::${r.strategy}`
     let e = merged.get(key)
     if (!e) {
-      e = { volatility_bucket, regime, fee_bucket, age_bucket, strategy: r.strategy, sim: null, real: null }
+      e = { volatility_bucket, regime, fee_bucket, age_bucket, strategy: r.strategy, sim: null, real: null, nofill: 0 }
       merged.set(key, e)
     }
+    if (kind === 'nofill') { e.nofill += r.n; return }
     if (!e[kind]) e[kind] = { n: 0, wins: 0, sumPnl: 0, winPnlSum: 0, lossPnlSum: 0 }
     e[kind].n          += r.n
     e[kind].wins       += r.wins
@@ -65,8 +79,9 @@ function reconcilePatterns() {
     e[kind].winPnlSum  += r.win_pnl_sum  || 0
     e[kind].lossPnlSum += r.loss_pnl_sum || 0
   }
-  for (const r of simRows)  addRow(r, 'sim')
-  for (const r of realRows) addRow(r, 'real')
+  for (const r of simRows)    addRow(r, 'sim')
+  for (const r of realRows)   addRow(r, 'real')
+  for (const r of noFillRows) addRow(r, 'nofill')
 
   let changed = 0, realCount = 0, simCount = 0
   const apply = db.transaction(() => {
@@ -107,6 +122,7 @@ function reconcilePatterns() {
         live_win_rate: realWr, live_mean_pnl: real?.mean_pnl ?? null, live_sample_count: real?.n ?? 0,
         sim_win_rate: simWr, sim_sample_count: sim?.n ?? 0, reality_gap,
         avg_win_pnl, avg_loss_pnl,
+        nofill_count: m.nofill ?? 0,
       })
       const moved = !before || before.sample_count !== chosen.n ||
         Math.abs((before.win_rate || 0) - win_rate) > 1e-9 || before.active !== active || before.source !== source
