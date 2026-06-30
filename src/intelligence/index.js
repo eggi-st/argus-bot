@@ -274,10 +274,13 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
         AND action_type IN ('add_liquidity', 'open_position')
     `).get(pool.pool)
     if ((smRow?.cnt || 0) > 0) {
-      smartMoneyConfirmed = true
-      confidence = Math.min(1, confidence * 1.15)
-      trace.push({ step: 'smart_money', value: round3(confidence), factor: 1.15, detail: `${smRow.cnt} smart wallet(s) LP'd in 24h` })
-      console.log(`[IC] 🐋 Smart money signal: ${smRow.cnt} wallet(s) in ${pool.base?.symbol} → conf boosted to ${(confidence*100).toFixed(0)}`)
+      smartMoneyConfirmed = true  // always recorded for analysis; the boost itself is config-gated
+      const smb = cfg.learning?.smartMoneyBoost
+      if (smb?.enabled && (smb.factor ?? 1) !== 1) {
+        confidence = Math.min(1, confidence * smb.factor)
+        trace.push({ step: 'smart_money', value: round3(confidence), factor: smb.factor, detail: `${smRow.cnt} smart wallet(s) LP'd in 24h` })
+        console.log(`[IC] 🐋 Smart money ×${smb.factor}: ${smRow.cnt} wallet(s) in ${pool.base?.symbol} → conf ${(confidence*100).toFixed(0)}`)
+      }
     }
   } catch (e) {
     console.warn('[IC] Smart money check failed:', e.message)
@@ -501,8 +504,14 @@ function evaluatePool(metrics = {}, strategy = null) {
     const smRow = pool.pool ? db.prepare(`SELECT COUNT(DISTINCT wallet_address) cnt FROM wallet_actions
       WHERE pool_address = ? AND wallet_type='smart_money' AND detected_at > datetime('now','-24 hours')
         AND action_type IN ('add_liquidity','open_position')`).get(pool.pool) : { cnt: 0 }
-    if ((smRow?.cnt || 0) > 0) { smartMoney = true; confidence = Math.min(1, confidence * 1.15)
-      trace.push({ step: 'smart_money', value: round3(confidence), factor: 1.15, detail: `${smRow.cnt} smart wallet(s)` }) }
+    if ((smRow?.cnt || 0) > 0) {
+      smartMoney = true  // recorded for analysis; boost is config-gated (default off — unearned)
+      const smb = cfg.learning?.smartMoneyBoost
+      if (smb?.enabled && (smb.factor ?? 1) !== 1) {
+        confidence = Math.min(1, confidence * smb.factor)
+        trace.push({ step: 'smart_money', value: round3(confidence), factor: smb.factor, detail: `${smRow.cnt} smart wallet(s)` })
+      }
+    }
   } catch {}
 
   if (pool.entry_indicator && !pool.entry_indicator.skipped && pool.entry_indicator.confirmed) {

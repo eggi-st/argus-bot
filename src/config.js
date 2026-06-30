@@ -205,6 +205,17 @@ const DEFAULTS = {
       youngAgeHours: 24,         // penalty maxes out at/below this (real 0-24h catastrophe rate 15%)
       maxPenalty: 0.12,          // max confidence cut for the youngest pools (×0.88)
     },
+    // Smart-money confidence boost — DEFAULT OFF (2026-06-30). When a tracked smart wallet LP'd the
+    // same pool in the last 24h, confidence was multiplied by `factor`. But on 95 boosted vs 175
+    // non-boosted closes the boosted ones did NOT outperform (WR 82% vs 84%, mean +0.55% vs +0.71%) —
+    // the auto-discovered (helius) wallets are not predictive alpha, so the boost was unearned and
+    // mis-calibrated confidence that now flows to Meridian. Detection still runs (smart_money_confirmed
+    // is recorded for analysis); only the multiplier is gated. Re-enable once wallets are PROVEN
+    // predictive (e.g. quality_score-weighted, or hand-curated KOL wallets in wallet.trackedWallets).
+    smartMoneyBoost: {
+      enabled: false,
+      factor: 1.15,
+    },
     // Phase 3a-ii — promotion + reconciliation.
     // 45: learning engages in a reasonable window; the deterministic gate + Wilson lower-bound
     // (which widens for small N and re-evaluates continuously) carry the ongoing statistical
