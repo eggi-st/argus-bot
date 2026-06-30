@@ -151,6 +151,23 @@ function liquidityModifier(pool, cfg) {
 }
 
 /**
+ * Token-age confidence modifier (Tier 1-B+). Returns a multiplicative factor in [1-maxPenalty, 1]
+ * that discounts pools younger than safeAgeHours — the catastrophe zone (real data: catas rate is
+ * elevated <72h, ≈0 above). Full confidence at ≥safeAgeHours; ramps to the floor toward youngAgeHours.
+ * Independent of the liquidity terms (age~mcap corr 0.05) so it does not double-count.
+ */
+function ageModifier(pool, cfg) {
+  const m = cfg.learning?.ageModifier
+  if (!m || m.enabled === false) return { factor: 1, note: null }
+  const age = (pool.token_age_hours != null && Number.isFinite(Number(pool.token_age_hours))) ? Number(pool.token_age_hours) : null
+  if (age == null || age >= m.safeAgeHours) return { factor: 1, note: null }
+  const span = Math.max(1e-9, m.safeAgeHours - m.youngAgeHours)
+  const frac = Math.min(1, Math.max(0, (m.safeAgeHours - age) / span))
+  const factor = Math.max(1 - m.maxPenalty, 1 - frac * m.maxPenalty)
+  return { factor, note: `age=${age.toFixed(0)}h<${m.safeAgeHours}h` }
+}
+
+/**
  * Resolve the screening config for a pipeline profile.
  * The base `screening` block is the default / bid_ask profile; named profiles
  * shallow-override it (all screening values are scalar, so a shallow merge is exact).
@@ -281,6 +298,14 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
     confidence = confidence * liqMod.factor
     trace.push({ step: 'liquidity_penalty', value: round3(confidence), factor: round3(liqMod.factor), detail: liqMod.note })
     console.log(`[IC] Liquidity penalty ×${liqMod.factor.toFixed(2)} (${liqMod.note}): ${pool.base?.symbol} → conf ${(confidence * 100).toFixed(0)}%`)
+  }
+
+  // Token-age penalty (Tier 1-B+) — discount pools in the young catastrophe zone (<safeAgeHours).
+  const ageMod = ageModifier(pool, cfg)
+  if (ageMod.factor < 1) {
+    confidence = confidence * ageMod.factor
+    trace.push({ step: 'age_penalty', value: round3(confidence), factor: round3(ageMod.factor), detail: ageMod.note })
+    console.log(`[IC] Age penalty ×${ageMod.factor.toFixed(2)} (${ageMod.note}): ${pool.base?.symbol} → conf ${(confidence * 100).toFixed(0)}%`)
   }
   trace.push({ step: 'final', value: round3(confidence), detail: exploration ? 'exploration quota (gate bypassed)' : 'gate passed' })
 

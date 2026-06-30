@@ -649,7 +649,7 @@ function switchPage(id) {
 }
 
 // ── Decision trace (#7) — why Argus chose this, step by step ───────────────────
-const TRACE_STEP_LABEL = { base_score:'skor dasar', pattern_adjust:'pattern', smart_money:'smart money', entry_indicator:'indikator entry', liquidity_penalty:'likuiditas', final:'final' }
+const TRACE_STEP_LABEL = { base_score:'skor dasar', pattern_adjust:'pattern', smart_money:'smart money', entry_indicator:'indikator entry', liquidity_penalty:'likuiditas', age_penalty:'umur token', final:'final' }
 function renderDecisionTrace(p) {
   const scores = p.strategy_scores, trace = p.confidence_trace
   if (!scores && !trace) return ''

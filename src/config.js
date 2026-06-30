@@ -174,21 +174,36 @@ const DEFAULTS = {
     emaAlpha: 0.15,            // EMA update weight for recent outcomes (scoring only)
     baseRateFallback: 0.50,    // base rate used until baseRateMinSamples real outcomes exist
     baseRateMinSamples: 30,    // min closed outcomes before a strategy's own base rate is trusted
-    // Liquidity-concentration confidence modifier (2026-06-30). Soft penalty for pools that PASS
-    // the antirug gate but sit in the riskier liquidity zone. Empirically (84 dry-run closes):
-    // catastrophes had ~2× TVL and ~2.3× TVL/holder vs winners (AUC separation power 0.22/0.21).
-    // Does NOT loosen the hard antirug gate — only adds a gradient WITHIN the allowed zone, so a
-    // clean pool (low tvl/mcap, low tvl/holder) keeps full confidence and a borderline one is
-    // discounted. Set enabled:false to disable. Tune as real-outcome data confirms the thresholds.
+    // Liquidity-concentration confidence modifier. Soft penalty for pools that PASS the antirug
+    // gate but sit in the riskier liquidity zone. RE-TUNED 2026-06-30 to REAL data (435 Meridian
+    // closes via simulate-modifiers.js): winners cluster at tvl/mcap≈0.044 & tvl/holder≈6, while
+    // catastrophes sit at tvl/mcap≈0.148 & tvl/holder≈26. The original sim-derived thresholds
+    // (clean20/high40, mcap0.05/0.10) were ~3× too high → near-inert (discrimination 0.026).
+    // Re-tuned values raise discrimination to 0.036 with only 4% winner over-penalty. Does NOT
+    // loosen the hard antirug gate — gradient WITHIN the allowed zone only. enabled:false to disable.
     liquidityModifier: {
       enabled: true,
-      tvlMcapClean: 0.05,        // tvl/mcap at/below this = no penalty (forensic winners ~0.05)
-      tvlMcapGate: 0.10,         // antirug hard-reject boundary; penalty ramps linearly clean→gate
+      tvlMcapClean: 0.045,       // tvl/mcap at/below this = no penalty (real winner median 0.044)
+      tvlMcapGate: 0.08,         // max penalty by here (real catastrophes start ~0.077 = catas p25)
       tvlMcapMaxPenalty: 0.10,   // max confidence cut from the tvl/mcap term (×0.90)
-      tvlPerHolderClean: 20,     // tvl-per-holder at/below this = no penalty (winners med ~16)
-      tvlPerHolderHigh: 40,      // at/above this = max penalty (catastrophes med ~39)
+      tvlPerHolderClean: 13,     // no penalty at/below (real winner p75 — keeps 75% of winners clean)
+      tvlPerHolderHigh: 26,      // max penalty at/above (real catastrophe median)
       tvlPerHolderMaxPenalty: 0.12,
       floor: 0.80,               // never cut confidence below this multiple (cap total at −20%)
+    },
+    // Token-age confidence modifier (2026-06-30). On 435 REAL closes, token_age_hours was the
+    // STRONGEST single predictor (AUC 0.846): catastrophe rate is concentrated below 72h (0-24h=15%,
+    // 48-72h=10%) and ≈0% at 72h+. NOT linear "older=better" (win-rate flat past 72h) — it's a
+    // catastrophe-zone DISCOUNT: full confidence at ≥safeAgeHours, ramping to a floor toward
+    // youngAgeHours. Independent of mcap/holders (age~mcap corr 0.05) so it is NOT double-counting.
+    // Backtest: 0% winner over-penalty, 28% of catastrophes discounted. Pairs with liquidityModifier
+    // (combined discrimination 0.062). The hard antirug gate (minTokenAgeHours) stays the floor;
+    // this softly down-weights the residual risky band (e.g. 48-72h) without rejecting its winners.
+    ageModifier: {
+      enabled: true,
+      safeAgeHours: 72,          // at/above this = no penalty (real catastrophe rate ≈0 past 72h)
+      youngAgeHours: 24,         // penalty maxes out at/below this (real 0-24h catastrophe rate 15%)
+      maxPenalty: 0.12,          // max confidence cut for the youngest pools (×0.88)
     },
     // Phase 3a-ii — promotion + reconciliation.
     // 45: learning engages in a reasonable window; the deterministic gate + Wilson lower-bound
