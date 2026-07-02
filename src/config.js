@@ -277,7 +277,12 @@ const DEFAULTS = {
     // ~+3%; a 5% target was unreachable → every position rode to max_hold ("time"). 2.5% lets
     // TP actually fire when fees accrue + price holds, so closes are faster & varied.
     netTargetPct: 2.5,    // take profit when net (gross + fee − slip) ≥ this
-    ilStopPct: 15,        // stop loss when single-sided IL ≤ −this
+    ilStopPct: 8,         // fresh-stop when single-sided IL ≤ −this. Was 15 (loose): the entire
+                          // dry-run loss tail came from 6 il_stop closes held ~70h that only fired
+                          // at −20/−28%. Counterfactual over 148 closed sims: capping filled losses
+                          // at −8% flips the whole book −0.41%→+1.18% (best of {8,10,12,15}); spot
+                          // −0.82→+1.02, limit_order −4.15→−1.15, bid_ask untouched. Matches the
+                          // live fresh-stop (8%) that was already validated positive (n=18).
     runUpExitPct: 30,     // price ran ≥ this above entry → SOL bid won't fill, reclaim capital
     maxHoldMinutes: 120,  // time-bound fallback (2h) — matches real Meridian hold times (median ~60-90m)
     // Fee simulation (net_pnl = single-sided P&L + fee estimate − fill-scaled slippage).
