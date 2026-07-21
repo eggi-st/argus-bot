@@ -44,6 +44,12 @@ const DEFAULTS = {
     // Adopts only a positive value; still subject to every downstream gate — admits nothing new.
     // Bounded per scan to cap extra API calls. Set enabled:false to restore the old behavior.
     volatilityRefetch: { enabled: true, maxPerScan: 40 },
+    // Jupiter Token API v2 enrichment (lite-api.jup.ag, no-auth). Fills antirug/organic/holder/
+    // age + token audit signal (mint/freeze authority, dev balance, top-holder concentration) by
+    // mint — the same data OKX would provide but can't without a key, so the OKX-fed rug/honeypot
+    // filter is currently dead. Fill-gaps only (never overwrites Meteora values); fail-safe. The
+    // audit-derived rug flags are SHADOW (logged, not yet hard-rejected). Set false to disable.
+    jupiterEnrich: true,
     // Anti-rug screen (attributed technique 'antirug_evilpanda', kind:'screen'). A universal
     // gate applied to ALL strategies. Thresholds learned from a 428-position forensic:
     // catastrophes (≤−5%) clustered at young age (~25h) + high TVL/mcap (~0.15) vs winners
@@ -298,6 +304,22 @@ const DEFAULTS = {
     // When indicators.enabled + exitPreset set, chart signals supplement the hard exits.
     // Only checked after minHoldBeforeIndicatorCheck minutes to avoid early false positives.
     minHoldBeforeIndicatorCheck: 20,  // min hold before indicators are consulted (minutes)
+  },
+  // Regime-risk OBSERVATORY. Tracks the (volatility × market-regime) → outcome map over a rolling
+  // window and reports which cells carry a stable, tail-heavy negative edge worth sizing DOWN.
+  // Validated 2026-07-21: the aggregate map separates, but per-cell EV FLIPS SIGN across time-thirds
+  // at current sample sizes — the signal is noise until more data accrues. So this ships as pure
+  // MONITORING: a cell only becomes 'brake_ready' after passing the stability gate for
+  // graduateStreak consecutive recomputes. mode 'observatory' = advisory only (size_factor exposed
+  // but never applied); switch to 'live' ONLY once cells graduate and a shadow period confirms it.
+  regimeRisk: {
+    mode:            'observatory',  // observatory (advisory-only) | live (Meridian honors size_factor)
+    cron:            '0 */6 * * *',
+    windowDays:      90,             // rolling window for the recompute
+    minSamples:      25,             // a cell below this stays 'immature' (never actioned)
+    tailRatePct:     4.0,            // require ≥ this %(pnl ≤ −8%) to count as tail-heavy
+    graduateStreak:  3,             // consecutive passing recomputes before a cell is brake_ready
+    brakeFactor:     0.5,            // advisory size multiplier for a brake_ready cell
   },
   wallet: {
     // Set your Solana wallet address to enable observation — via WATCH_WALLET in .env

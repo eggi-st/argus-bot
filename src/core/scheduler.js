@@ -83,6 +83,14 @@ function start() {
     })
   }
 
+  // ── Regime-risk observatory: rolling recompute of the (vol × regime) map ───
+  const regimeCfg = require('../config').getConfig().regimeRisk || {}
+  if (regimeCfg.mode !== 'off') {
+    schedule('regime-observatory', regimeCfg.cron || '0 */6 * * *', () => {
+      bus.emitSafe('regime_observatory', { ts: Date.now() })
+    })
+  }
+
   // ── Wallet lifecycle: state transitions + quality scoring ─────────────────
   const walletCfg = require('../config').getConfig().wallet || {}
   schedule('wallet-lifecycle', walletCfg.lifecycle?.cron || '0 6 * * *', () => {

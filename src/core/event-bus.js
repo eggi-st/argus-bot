@@ -35,6 +35,7 @@ const SLOW_EVENTS = new Set([
   'tuning_applied',          // Auto-tuner / operator applied a tuning delta
   'wallet_lifecycle_check',  // Daily wallet state-machine + quality scoring cycle
   'wallet_observer_recovered', // Observer RPC responding again after a down period
+  'regime_observatory',      // Rolling recompute of the regime-risk map (monitoring)
 ])
 
 const ALL_EVENTS = new Set([...FAST_EVENTS, ...SLOW_EVENTS])

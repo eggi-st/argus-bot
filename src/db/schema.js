@@ -358,6 +358,34 @@ function migrateSchema() {
     if (!e.message?.includes('already exists')) console.warn('[Schema] exit_technique_stats:', e.message)
   }
 
+  // regime_risk table — regime-risk OBSERVATORY. One row per (volatility × market-regime) cell,
+  // recomputed on a rolling window. stable_streak = consecutive recomputes the cell passed the
+  // brake gate; a cell is only 'brake_ready' after graduateStreak in a row. Advisory only until
+  // regimeRisk.mode = 'live'.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS regime_risk (
+        vol_bucket    TEXT    NOT NULL,
+        regime        TEXT    NOT NULL,
+        updated_at    TEXT,
+        window_days   INTEGER,
+        n             INTEGER,
+        ev            REAL,
+        win_rate      REAL,
+        wilson_lb     REAL,
+        tail_rate     REAL,
+        sign_stable   INTEGER DEFAULT 0,
+        gate_pass     INTEGER DEFAULT 0,
+        stable_streak INTEGER DEFAULT 0,
+        maturity      TEXT    DEFAULT 'immature',
+        size_factor   REAL    DEFAULT 1.0,
+        PRIMARY KEY (vol_bucket, regime)
+      );
+    `)
+  } catch (e) {
+    if (!e.message?.includes('already exists')) console.warn('[Schema] regime_risk:', e.message)
+  }
+
   try {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_wallet_type ON wallet_actions(wallet_type, detected_at)`)
   } catch (e) {
@@ -750,6 +778,29 @@ function getTokenAth(mint) {
   return db.prepare(`SELECT * FROM token_ath WHERE token_mint = ?`).get(mint)
 }
 
+function upsertRegimeRisk(r) {
+  return db.prepare(`
+    INSERT INTO regime_risk
+      (vol_bucket, regime, updated_at, window_days, n, ev, win_rate, wilson_lb, tail_rate,
+       sign_stable, gate_pass, stable_streak, maturity, size_factor)
+    VALUES
+      (@vol_bucket, @regime, @updated_at, @window_days, @n, @ev, @win_rate, @wilson_lb, @tail_rate,
+       @sign_stable, @gate_pass, @stable_streak, @maturity, @size_factor)
+    ON CONFLICT(vol_bucket, regime) DO UPDATE SET
+      updated_at=@updated_at, window_days=@window_days, n=@n, ev=@ev, win_rate=@win_rate,
+      wilson_lb=@wilson_lb, tail_rate=@tail_rate, sign_stable=@sign_stable, gate_pass=@gate_pass,
+      stable_streak=@stable_streak, maturity=@maturity, size_factor=@size_factor
+  `).run(r)
+}
+
+function getRegimeRisk() {
+  return db.prepare(`SELECT * FROM regime_risk ORDER BY ev ASC`).all()
+}
+
+function getRegimeRiskCell(volBucket, regime) {
+  return db.prepare(`SELECT * FROM regime_risk WHERE vol_bucket=? AND regime=?`).get(volBucket, regime)
+}
+
 module.exports = {
   initSchema, db,
   recordDecision, expireDecision, markFollowed,
@@ -758,4 +809,5 @@ module.exports = {
   openOrUpdateGap, resolveStaleGaps, listOpenGaps,
   recordSystemReport, recordTuningEvent, getTuningEvents,
   recordTokenPrice, getTokenAth,
+  upsertRegimeRisk, getRegimeRisk, getRegimeRiskCell,
 }

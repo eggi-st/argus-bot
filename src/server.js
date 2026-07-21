@@ -752,6 +752,36 @@ app.get('/api/screening-rejections', (req, res) => {
   }
 })
 
+// Regime-risk observatory. Full map, or one cell's advisory via ?vol=&regime= (for Meridian to
+// query before a deploy). In mode 'observatory' size_factor is advisory (always 1.0); only mode
+// 'live' returns a real down-size for graduated cells. Fail-safe: unknown/immature cell → 1.0.
+app.get('/api/regime-risk', (req, res) => {
+  try {
+    const { getRegimeRisk, getRegimeRiskCell } = require('./db/schema')
+    const mode = require('./config').getConfig().regimeRisk?.mode || 'observatory'
+    const { vol, regime } = req.query
+    if (vol && regime) {
+      const cell = getRegimeRiskCell(vol, regime)
+      return res.json({
+        mode, vol, regime,
+        verdict: cell?.maturity || 'unknown',
+        size_factor: cell?.size_factor ?? 1.0,
+        n: cell?.n ?? 0, ev: cell?.ev ?? null, tail_rate: cell?.tail_rate ?? null,
+        stable_streak: cell?.stable_streak ?? 0,
+      })
+    }
+    const rows = getRegimeRisk()
+    const summary = {
+      brake_ready: rows.filter(r => r.maturity === 'brake_ready').length,
+      watching:    rows.filter(r => r.maturity === 'watching').length,
+      immature:    rows.filter(r => r.maturity === 'immature').length,
+    }
+    res.json({ mode, cells: rows, summary })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // Screening funnel: per-pipeline waterfall showing how many pools were eliminated at each stage.
 // Query window: last 24h of rejections (covers several scan cycles).
 // "passed" is derived from decisions created in the same window per strategy.

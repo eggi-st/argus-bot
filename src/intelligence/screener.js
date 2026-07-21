@@ -263,6 +263,73 @@ async function enrichWithOkx(pools) {
   log('screener', `OKX enriched ${okxCalls}/${pools.length} pool(s) — sub-call fails: adv=${advFail} price=${priceFail} risk=${riskFail}`)
 }
 
+// ── Jupiter token enrichment (lite-api.jup.ag, no-auth) ────────────────────────
+// Fills antirug/organic/holder/age + token-audit signal by mint. This is the same class of
+// data OKX supplies but WITHOUT a key (the OKX-fed rug/honeypot filter is dead when no key is
+// configured). Fill-gaps only; audit-derived rug flags are attached for shadow observation.
+const JUP_BASE = 'https://lite-api.jup.ag'
+const JUP_TIMEOUT_MS = 8_000
+
+async function getJupiterTokenInfo(mint) {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), JUP_TIMEOUT_MS)
+  try {
+    const res = await fetch(`${JUP_BASE}/tokens/v2/search?query=${mint}`, { signal: ctrl.signal })
+    if (!res.ok) throw new Error(`Jupiter ${res.status}`)
+    const arr = await res.json()
+    const d = Array.isArray(arr) ? arr.find(t => t?.id === mint) : (arr?.id === mint ? arr : null)
+    if (!d) return null
+    const iso = d.firstPool?.createdAt || d.createdAt || null
+    const createdMs = iso ? Date.parse(iso) : NaN
+    const a = d.audit || {}
+    return {
+      holders:            num(d.holderCount),
+      mcap:               num(d.mcap),
+      organic:            num(d.organicScore),
+      organic_label:      d.organicScoreLabel || null,
+      top_holders_pct:    num(a.topHoldersPercentage),
+      created_at:         Number.isFinite(createdMs) ? createdMs : null,
+      mint_auth_active:   a.mintAuthorityDisabled === false,
+      freeze_auth_active: a.freezeAuthorityDisabled === false,
+      dev_balance_pct:    num(a.devBalancePercentage),
+      verified:           d.isVerified === true,
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function enrichWithJupiter(pools) {
+  const results = await Promise.allSettled(
+    pools.map(p => (p.base?.mint ? getJupiterTokenInfo(p.base.mint) : Promise.resolve(null)))
+  )
+  let filled = 0, fail = 0, rugShadow = 0
+  for (let i = 0; i < pools.length; i++) {
+    const r = results[i]
+    if (r.status !== 'fulfilled') { fail++; continue }
+    const j = r.value
+    if (!j) continue
+    const p = pools[i]
+    p.token_x = p.token_x || {}
+    // Fill gaps only — never overwrite a value Meteora already provided.
+    if (p.base_token_holders == null && j.holders != null)     p.base_token_holders = j.holders
+    if (p.holders == null && j.holders != null)                p.holders = j.holders
+    if (p.token_x.market_cap == null && j.mcap != null)        p.token_x.market_cap = j.mcap
+    if (p.token_x.organic_score == null && j.organic != null)  p.token_x.organic_score = j.organic
+    if (p.token_x.created_at == null && j.created_at != null)  p.token_x.created_at = j.created_at
+    if (p.top10_pct == null && j.top_holders_pct != null)      p.top10_pct = j.top_holders_pct
+    // Audit signal (no-auth). Attached for observability + future gating. SHADOW for now:
+    // active mint/freeze authority is a real rug vector — logged, not yet hard-rejected.
+    p.jup_mint_auth_active   = j.mint_auth_active
+    p.jup_freeze_auth_active = j.freeze_auth_active
+    p.jup_dev_balance_pct    = j.dev_balance_pct
+    p.jup_verified           = j.verified
+    if (j.mint_auth_active || j.freeze_auth_active) rugShadow++
+    filled++
+  }
+  log('screener', `Jupiter enriched ${filled}/${pools.length} pool(s) — fails: ${fail}, rug-authority(shadow): ${rugShadow}`)
+}
+
 // ── Hard reject reasons ────────────────────────────────────────────────────────
 
 function getRejectReason(pool, s) {
@@ -475,9 +542,12 @@ async function getTopCandidates({ limit = 10, screening, pipeline } = {}) {
     .sort((a, b) => scoreCandidate(b) - scoreCandidate(a))
     .slice(0, limit + 5)
 
-  // OKX enrichment (parallel)
+  // Token enrichment (parallel). Jupiter (no-auth) supplies the antirug/organic/holder/audit
+  // signal the OKX path can't without a key; OKX adds extra risk flags when a key IS configured.
   if (deduped.length > 0) {
-    await enrichWithOkx(deduped)
+    const jobs = [enrichWithOkx(deduped)]
+    if (getConfig().screening?.jupiterEnrich !== false) jobs.unshift(enrichWithJupiter(deduped))
+    await Promise.all(jobs)
   }
 
   const now = new Date().toISOString()
