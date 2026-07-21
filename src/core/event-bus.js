@@ -9,6 +9,7 @@ const FAST_EVENTS = new Set([
   'scan_complete',          // Scan cycle finished
   'risk_gate_blocked',      // Recommendation blocked by RiskState
   'recommendation_expired', // TTL hit — verdict invalidated
+  'wallet_observer_down',   // Observer: N consecutive all-RPC-error cycles (silent-outage guard)
   'heartbeat',              // Scheduler pulse
   'ttl_check',              // TTL check cycle
   'config_updated',         // user-config.json written at runtime (writeUserConfig)
@@ -33,6 +34,7 @@ const SLOW_EVENTS = new Set([
   'tuning_proposal',         // Auto-tuner proposed a bounded delta (shadow)
   'tuning_applied',          // Auto-tuner / operator applied a tuning delta
   'wallet_lifecycle_check',  // Daily wallet state-machine + quality scoring cycle
+  'wallet_observer_recovered', // Observer RPC responding again after a down period
 ])
 
 const ALL_EVENTS = new Set([...FAST_EVENTS, ...SLOW_EVENTS])

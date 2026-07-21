@@ -24,6 +24,7 @@ function reconcilePatterns() {
     SELECT d.condition_bucket AS bucket, dr.strategy AS strategy,
            COUNT(*) AS n,
            SUM(CASE WHEN dr.net_pnl_pct > 0 THEN 1 ELSE 0 END) AS wins,
+           SUM(CASE WHEN dr.net_pnl_pct > 0 THEN 1 ELSE 0 END) AS pos_count,
            AVG(dr.net_pnl_pct) AS mean_pnl,
            SUM(CASE WHEN dr.net_pnl_pct > 0 THEN dr.net_pnl_pct ELSE 0 END) AS win_pnl_sum,
            SUM(CASE WHEN dr.net_pnl_pct <= 0 THEN dr.net_pnl_pct ELSE 0 END) AS loss_pnl_sum
@@ -51,6 +52,7 @@ function reconcilePatterns() {
     SELECT condition_bucket AS bucket, strategy AS strategy,
            COUNT(*) AS n,
            SUM(CASE WHEN win = 1 THEN 1 ELSE 0 END) AS wins,
+           SUM(CASE WHEN pnl_pct > 0 THEN 1 ELSE 0 END) AS pos_count,
            AVG(pnl_pct) AS mean_pnl,
            SUM(CASE WHEN pnl_pct > 0 THEN pnl_pct ELSE 0 END) AS win_pnl_sum,
            SUM(CASE WHEN pnl_pct <= 0 THEN pnl_pct ELSE 0 END) AS loss_pnl_sum
@@ -72,9 +74,10 @@ function reconcilePatterns() {
       merged.set(key, e)
     }
     if (kind === 'nofill') { e.nofill += r.n; return }
-    if (!e[kind]) e[kind] = { n: 0, wins: 0, sumPnl: 0, winPnlSum: 0, lossPnlSum: 0 }
+    if (!e[kind]) e[kind] = { n: 0, wins: 0, posCount: 0, sumPnl: 0, winPnlSum: 0, lossPnlSum: 0 }
     e[kind].n          += r.n
     e[kind].wins       += r.wins
+    e[kind].posCount   += r.pos_count   || 0
     e[kind].sumPnl     += (r.mean_pnl || 0) * r.n
     e[kind].winPnlSum  += r.win_pnl_sum  || 0
     e[kind].lossPnlSum += r.loss_pnl_sum || 0
@@ -108,9 +111,13 @@ function reconcilePatterns() {
       // EV decomposition: separate avg PnL for wins vs losses.
       // payoff_ratio = avg_win_pnl / |avg_loss_pnl| — blocks patterns with bad risk/reward
       // even when win_rate looks acceptable (e.g. wins +0.5%, losses -8% = terrible payoff).
-      const lossCount = chosen.n - chosen.wins
-      const avg_win_pnl  = chosen.wins > 0 ? chosen.winPnlSum  / chosen.wins : null
-      const avg_loss_pnl = lossCount   > 0 ? chosen.lossPnlSum / lossCount   : null
+      // Use the pnl-sign count (matches winPnlSum/lossPnlSum predicates) — NOT the win-flag
+      // count — so avg_win/avg_loss numerator and denominator can't diverge when a row's
+      // `win` flag disagrees with sign(pnl) (REAL rollup: wins uses win=1, sums use pnl>0).
+      const posCount  = chosen.posCount ?? chosen.wins
+      const lossCount = chosen.n - posCount
+      const avg_win_pnl  = posCount  > 0 ? chosen.winPnlSum  / posCount  : null
+      const avg_loss_pnl = lossCount > 0 ? chosen.lossPnlSum / lossCount : null
 
       const before = db.prepare(
         `SELECT win_rate, sample_count, active, source FROM pattern_library WHERE volatility_bucket=? AND regime=? AND strategy=? AND fee_bucket=? AND age_bucket=?`

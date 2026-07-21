@@ -29,6 +29,7 @@ function assessLifecycles() {
   const coolingDays  = lCfg.coolingDays  ?? 3
   const staleDays    = lCfg.staleDays    ?? 7
   const retiredDays  = lCfg.retiredDays  ?? 14
+  const minFloor     = lCfg.minActiveFloor ?? 3
 
   const now = Date.now()
   const coolingCutoff  = new Date(now - coolingDays  * 86_400_000).toISOString()
@@ -49,6 +50,33 @@ function assessLifecycles() {
         ELSE 1
       END
   `).run({ coolingCutoff, staleCutoff, retiredCutoff })
+
+  // Anti-spiral floor: if retirement drained the observable pool below minFloor, rescue the
+  // most-recently-seen retired wallets back to 'stale' (active=1). Without this, a single
+  // upstream outage (discovery + RPC both down, as happened when one Helius key throttled)
+  // retires every wallet and the observer dies permanently — nothing left to re-detect
+  // activity that would revive them. Keeping a floor lets it self-heal once RPC recovers.
+  if (minFloor > 0) {
+    const activeCount = db.prepare(
+      `SELECT COUNT(*) AS c FROM tracked_wallets WHERE lifecycle_state != 'retired'`
+    ).get().c
+    if (activeCount < minFloor) {
+      const need = minFloor - activeCount
+      const rescued = db.prepare(`
+        UPDATE tracked_wallets
+        SET lifecycle_state = 'stale', active = 1
+        WHERE address IN (
+          SELECT address FROM tracked_wallets
+          WHERE lifecycle_state = 'retired' AND last_seen IS NOT NULL
+          ORDER BY last_seen DESC
+          LIMIT @need
+        )
+      `).run({ need })
+      if (rescued.changes > 0) {
+        console.log(`[WalletLifecycle] Anti-spiral floor: rescued ${rescued.changes} wallet(s) from retirement (pool was ${activeCount}/${minFloor})`)
+      }
+    }
+  }
 
   const counts = db.prepare(
     `SELECT lifecycle_state, COUNT(*) AS n FROM tracked_wallets GROUP BY lifecycle_state`

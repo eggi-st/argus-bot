@@ -7,8 +7,13 @@ require('dotenv').config({ override: true })
 const { init } = require('./src/core/init')
 
 process.on('uncaughtException', (err) => {
-  console.error('[Argus] Uncaught exception:', err.message)
+  // After an uncaught exception the process is in an undefined state — logging and continuing
+  // risks acting on corrupted state (SQLite writes, Meridian signals). Exit and let PM2 restart
+  // clean. (unhandledRejection stays log-only: transient fire-and-forget rejections shouldn't
+  // trigger a full restart, and there are many such paths.)
+  console.error('[Argus] Uncaught exception — exiting for clean PM2 restart:', err.message)
   console.error(err.stack)
+  process.exit(1)
 })
 
 process.on('unhandledRejection', (reason) => {

@@ -5,27 +5,35 @@ const { parseMeteoraTx } = require('./tx-parser')
 const { processAction } = require('./matcher')
 const { recordWalletAction, markFollowed } = require('../db/schema')
 
-let _timer   = null
-let _cursors = new Map()   // address → lastSig
-let _wallets = []          // [{address, label, type}]
+let _timer        = null
+let _cursors      = new Map()   // address → lastSig
+let _wallets      = []          // [{address, label, type}]
+let _rpcUrls      = []          // [primary, ...fallbacks]
+let _maxFailed    = 5           // consecutive all-error cycles before alerting
+let _failedCycles = 0           // consecutive cycles where every RPC call errored
+let _alertedDown  = false       // one-shot guard so we alert once, not every cycle
+let _polling      = false       // re-entrancy guard: skip a tick if the previous still runs
 
 /**
  * Poll a single wallet for new Meteora transactions.
+ * Returns 'rpc_error' when the signature fetch failed on every endpoint,
+ * 'ok' otherwise (including "no new activity") — the caller uses this to tell a
+ * genuine outage apart from a quiet market when tracking observer health.
  */
-async function pollWallet(wallet, rpcUrl) {
+async function pollWallet(wallet, rpcUrls) {
   const lastSig = _cursors.get(wallet.address) || null
   let sigs
   try {
-    sigs = await getSignaturesForAddress(rpcUrl, wallet.address, {
+    sigs = await getSignaturesForAddress(rpcUrls, wallet.address, {
       limit: 20,
       until: lastSig || undefined,
     })
   } catch (e) {
-    console.warn(`[Wallet] ${wallet.label}: getSignaturesForAddress error: ${e.message}`)
-    return
+    console.warn(`[Wallet] ${wallet.label}: getSignaturesForAddress error (all endpoints): ${e.message}`)
+    return 'rpc_error'
   }
 
-  if (!sigs?.length) return
+  if (!sigs?.length) return 'ok'
 
   const newest = sigs[0].signature
 
@@ -33,18 +41,18 @@ async function pollWallet(wallet, rpcUrl) {
   if (!lastSig) {
     _cursors.set(wallet.address, newest)
     console.log(`[Wallet] ${wallet.label} (${wallet.type}): cursor initialized at ${newest.slice(0, 8)}…`)
-    return
+    return 'ok'
   }
 
   _cursors.set(wallet.address, newest)
 
   const fresh = sigs.filter(s => !s.err)
-  if (!fresh.length) return
+  if (!fresh.length) return 'ok'
 
   let found = 0
   for (const sig of fresh) {
     try {
-      const txResult = await getParsedTransaction(rpcUrl, sig.signature)
+      const txResult = await getParsedTransaction(rpcUrls, sig.signature)
       const action = parseMeteoraTx(txResult, sig.signature)
       if (!action) continue
 
@@ -88,20 +96,46 @@ async function pollWallet(wallet, rpcUrl) {
       } catch { /* non-critical */ }
     }
   }
+  return 'ok'
 }
 
 /**
- * Poll all wallets sequentially (avoids rate-limiting on shared RPC).
+ * Poll all wallets sequentially (avoids rate-limiting on shared RPC), then update
+ * observer-health state. A cycle is a FAILURE only when every wallet's RPC call
+ * errored on all endpoints — "no activity" is healthy. After _maxFailed consecutive
+ * failed cycles a one-shot P1 alert fires; the next healthy cycle clears it.
  */
-async function pollAll(wallets, rpcUrl) {
+async function pollAll(wallets, rpcUrls) {
+  let errored = 0
   for (const wallet of wallets) {
-    await pollWallet(wallet, rpcUrl)
+    if ((await pollWallet(wallet, rpcUrls)) === 'rpc_error') errored++
+  }
+
+  const allErrored = wallets.length > 0 && errored === wallets.length
+  if (allErrored) {
+    _failedCycles++
+    // Re-fire every _maxFailed cycles while down (not a pure one-shot) so the P1 alert isn't
+    // lost forever if Telegram was also unreachable during the outage that triggered it.
+    if (_failedCycles >= _maxFailed && (_failedCycles - _maxFailed) % _maxFailed === 0) {
+      _alertedDown = true
+      console.error(`[Wallet] Observer DOWN: ${_failedCycles} consecutive all-RPC-error cycles across ${wallets.length} wallet(s)`)
+      bus.emitSafe('wallet_observer_down', { failedCycles: _failedCycles, wallets: wallets.length })
+    }
+  } else {
+    if (_alertedDown) {
+      console.log('[Wallet] Observer recovered — RPC responding again')
+      bus.emitSafe('wallet_observer_recovered', { afterFailedCycles: _failedCycles })
+    }
+    _failedCycles = 0
+    _alertedDown  = false
   }
 }
 
-function start(wallets, rpcUrl, intervalMs) {
+function start(wallets, rpcUrls, intervalMs, opts = {}) {
   if (_timer) return
-  _wallets = wallets
+  _wallets   = wallets
+  _rpcUrls   = Array.isArray(rpcUrls) ? rpcUrls.filter(Boolean) : [rpcUrls].filter(Boolean)
+  _maxFailed = opts.healthMaxFailedCycles ?? 5
 
   const own = wallets.filter(w => w.type === 'own').length
   const sm  = wallets.filter(w => w.type === 'smart_money').length
@@ -111,11 +145,20 @@ function start(wallets, rpcUrl, intervalMs) {
     console.log(`[Wallet]   ${icon} ${w.label}: ${w.address.slice(0, 8)}…`)
   }
 
+  // Re-entrancy guard: with per-call RPC timeouts a cycle is bounded, but if a slow cycle
+  // ever runs past intervalMs we skip the overlapping tick instead of piling up concurrent
+  // pollAll runs that mutate the shared _cursors map.
+  const tick = () => {
+    if (_polling) { console.warn('[Wallet] Previous poll cycle still running — skipping tick'); return }
+    _polling = true
+    pollAll(_wallets, _rpcUrls)
+      .catch(e => console.error('[Wallet] Poll cycle failed:', e.message))
+      .finally(() => { _polling = false })
+  }
+
   setTimeout(() => {
-    pollAll(wallets, rpcUrl).catch(e => console.error('[Wallet] Initial poll failed:', e.message))
-    _timer = setInterval(() => {
-      pollAll(wallets, rpcUrl).catch(e => console.error('[Wallet] Poll cycle failed:', e.message))
-    }, intervalMs)
+    tick()
+    _timer = setInterval(tick, intervalMs)
   }, 5000)
 }
 
@@ -137,7 +180,10 @@ function stop() {
 
 function getStatus() {
   return {
-    active:  !!_timer,
+    active:       !!_timer,
+    failedCycles: _failedCycles,
+    down:         _alertedDown,
+    endpoints:    _rpcUrls.length,
     wallets: _wallets.map(w => ({
       address:       w.address,
       label:         w.label,

@@ -47,6 +47,9 @@ function init() {
   }
 
   _rpcUrl = wCfg.rpcUrl || 'https://api.mainnet-beta.solana.com'
+  // Primary first, then configured fallbacks — the observer rotates through these so a
+  // single throttled key can't silently kill all observation.
+  const rpcUrls = [_rpcUrl, ...(wCfg.rpcFallbackUrls || [])]
   const intervalMs = wCfg.pollIntervalMs ?? 30_000
 
   if (!wallets.length) {
@@ -54,7 +57,9 @@ function init() {
     return
   }
 
-  observer.start(wallets, _rpcUrl, intervalMs)
+  observer.start(wallets, rpcUrls, intervalMs, {
+    healthMaxFailedCycles: wCfg.healthMaxFailedCycles ?? 5,
+  })
 
   // Hot-add newly discovered wallets without restarting observer
   bus.onSlow('tracked_wallets_updated', () => {

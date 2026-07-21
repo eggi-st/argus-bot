@@ -9,6 +9,19 @@ function init() {
     telegram.circuitBreaker(reason)
   })
 
+  // Wallet observer stopped receiving RPC responses → P1 alert (silent-outage guard)
+  bus.onFast('wallet_observer_down', payload => {
+    telegram.observerDown({
+      failedCycles: payload?.failedCycles ?? 0,
+      wallets:      payload?.wallets ?? 0,
+    })
+  })
+
+  // Wallet observer RPC responding again → P3 recovery notice
+  bus.onSlow('wallet_observer_recovered', payload => {
+    telegram.observerRecovered({ afterFailedCycles: payload?.afterFailedCycles ?? 0 })
+  })
+
   // Dry run position closed → P3 info
   bus.onSlow('outcome_recorded', payload => {
     if (payload?.net_pnl_pct == null) return

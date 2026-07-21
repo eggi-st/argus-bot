@@ -74,19 +74,16 @@ async function fetchPoolDetail({ poolAddress, timeframe }) {
   return (data.data || [])[0] ?? null
 }
 
-async function applyVolatilityTf(rawPools, sourceTf) {
-  const targetTf = getVolatilityTf(sourceTf)
-  if (sourceTf === targetTf) {
-    rawPools.forEach(p => p && (p.volatility_timeframe = targetTf))
-    return rawPools
-  }
-  const addrs = [...new Set(rawPools.map(p => p?.pool_address).filter(Boolean))]
+// Re-fetch volatility for a set of pools via the single-pool detail endpoint and adopt
+// any positive value. Shared by the timeframe-mismatch path and the zero-vol recovery path.
+async function refetchVolatility(rawPools, addrs, targetTf) {
   const results = await Promise.allSettled(
     addrs.map(a =>
       fetchPoolDetail({ poolAddress: a, timeframe: targetTf })
         .then(p => ({ addr: a, volatility: num(p?.volatility) }))
     )
   )
+  let recovered = 0
   const byPool = new Map()
   for (const r of results) {
     if (r.status === 'fulfilled' && r.value.volatility != null)
@@ -94,10 +91,43 @@ async function applyVolatilityTf(rawPools, sourceTf) {
   }
   for (const p of rawPools) {
     if (p?.pool_address && byPool.has(p.pool_address)) {
-      p.volatility = byPool.get(p.pool_address)
+      const v = byPool.get(p.pool_address)
+      // Never clobber a usable volatility with a non-positive refetch (the detail endpoint
+      // can also return 0). Only adopt a strictly-positive value.
+      if (!(v > 0)) continue
+      if (!(num(p.volatility) > 0)) recovered++
+      p.volatility = v
       p.volatility_timeframe = targetTf
     }
   }
+  return recovered
+}
+
+async function applyVolatilityTf(rawPools, sourceTf) {
+  const targetTf = getVolatilityTf(sourceTf)
+
+  if (sourceTf !== targetTf) {
+    const addrs = [...new Set(rawPools.map(p => p?.pool_address).filter(Boolean))]
+    await refetchVolatility(rawPools, addrs, targetTf)
+  } else {
+    rawPools.forEach(p => p && (p.volatility_timeframe = targetTf))
+  }
+
+  // Zero-vol data-gap recovery: the bulk discovery page often reports volatility=0 for pools
+  // that DO have data at the detail endpoint. Give those a bounded second chance (same API).
+  const rCfg = getConfig().screening?.volatilityRefetch || {}
+  if (rCfg.enabled !== false) {
+    const zeroAddrs = [...new Set(
+      rawPools.filter(p => p?.pool_address && !(num(p.volatility) > 0)).map(p => p.pool_address)
+    )].slice(0, rCfg.maxPerScan ?? 40)
+    if (zeroAddrs.length) {
+      const recovered = await refetchVolatility(rawPools, zeroAddrs, targetTf)
+      if (recovered > 0) {
+        console.log(`[Screener] Volatility re-fetch recovered ${recovered}/${zeroAddrs.length} zero-vol pool(s)`)
+      }
+    }
+  }
+
   return rawPools
 }
 
@@ -408,6 +438,7 @@ async function discoverPools({ page_size = 50, screening, pipeline } = {}) {
           scanned_at: scanTime, pool_address: pool.pool_address,
           token_symbol: pool.token_x?.symbol || null, token_mint: mint,
           reject_stage: 'screener', reason: 'blacklisted token', key_metrics: null,
+          pipeline: pipeline || null,
         })
       } catch {}
       return false

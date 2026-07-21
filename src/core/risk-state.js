@@ -67,10 +67,20 @@ class RiskState {
   // ── Synchronous gate ─────────────────────────────────────────────────────
   // Called BEFORE any recommendation is shown to the user.
   // Returns { allowed: true } or { allowed: false, reason: string }
+  //
+  // NOTE (deliberate no-op — do NOT "fix" by wiring the counters): the position-count and
+  // daily-loss guards below are VESTIGIAL from when Argus executed its own trades. Argus is now
+  // advisory (Meridian executes; execution risk gating lives THERE), and it runs ~15-20 concurrent
+  // dry-run sims for learning. `incrementOpenCount`/`recordRealizedLoss` are intentionally left
+  // uncalled — wiring them to sim positions would make current_open_count (≈17) exceed
+  // max_open_positions (5) and permanently block the scan, starving the learning pipeline. The
+  // ACTIVE protections here are the circuit breaker (tripped by real signals elsewhere) and the
+  // token blacklist. To enforce a real position/loss cap, do it in Meridian, not here.
   check(tokenMint = null) {
     if (this._state.circuit_breaker_open) {
       return { allowed: false, reason: `Circuit breaker aktif: ${this._state.circuit_breaker_reason}` }
     }
+    // Inert unless a position cap is ever wired for a genuinely execution-capable deployment.
     if (this._state.current_open_count >= this.limits.max_open_positions) {
       return { allowed: false, reason: `Batas ${this.limits.max_open_positions} posisi terbuka sudah tercapai` }
     }

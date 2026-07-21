@@ -113,6 +113,11 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_dry_run_decision  ON dry_run_positions(decision_id);
     CREATE INDEX IF NOT EXISTS idx_wallet_detected   ON wallet_actions(detected_at);
     CREATE INDEX IF NOT EXISTS idx_pattern_active    ON pattern_library(active);
+    -- pool_address is the join key on the observer hot path (matcher.js runs one lookup per
+    -- account per tx) and the bursty meridian signal path. (feedback_outcomes index lives with
+    -- that table, created later.)
+    CREATE INDEX IF NOT EXISTS idx_decisions_pool    ON decisions(pool_address);
+    CREATE INDEX IF NOT EXISTS idx_dry_run_pool      ON dry_run_positions(pool_address);
   `)
 
   db.exec(`
@@ -229,7 +234,8 @@ function migrateSchema() {
         token_mint   TEXT,
         reject_stage TEXT    NOT NULL,
         reason       TEXT    NOT NULL,
-        key_metrics  TEXT
+        key_metrics  TEXT,
+        pipeline     TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_rej_scanned ON screening_rejections(scanned_at);
     `)
@@ -420,6 +426,7 @@ function migrateSchema() {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_outcome_id ON feedback_outcomes(outcome_id) WHERE outcome_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_feedback_tech ON feedback_outcomes(entry_technique, strategy);
+      CREATE INDEX IF NOT EXISTS idx_feedback_pool ON feedback_outcomes(pool_address);
     `)
     // Existing dbs (VPS): add the rich-features column if missing (fresh dbs already have it).
     try { db.exec(`ALTER TABLE feedback_outcomes ADD COLUMN features_json TEXT`) } catch {}
@@ -438,6 +445,10 @@ function migratePatternLibraryMultiDim() {
 
   console.log('[Schema] Rebuilding pattern_library → 5-dim UNIQUE (vol×regime×strategy×fee×age)')
   db.transaction(() => {
+    // Clear any leftover _v2 from a migration that died mid-flight before the RENAME.
+    // Without this, the CREATE below throws "table already exists" on every subsequent boot,
+    // the transaction rolls back and re-throws, and init() → process.exit(1) boot-loops.
+    db.exec(`DROP TABLE IF EXISTS pattern_library_v2`)
     db.exec(`
       CREATE TABLE pattern_library_v2 (
         id                INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -189,8 +189,17 @@ async function runDiscovery() {
       // Stop at first successful source
       break
     } catch (e) {
-      console.warn(`[Hivemind] ${sourceName} failed: ${e.message} → trying next source`)
-      markFailure(sourceName, e.message)
+      // "No seed input" (empty decisions/token history — e.g. a fresh install or a scan-less
+      // window) is NOT a source outage. Penalizing it with markFailure racks up failure_count
+      // and auto-pauses healthy sources for 24h, which can drain the discovery chain down to a
+      // single external API (a self-inflicted SPOF). Skip without penalty; only real errors count.
+      const noSeed = /no recent (decisions|token)|seed from|run a scan first/i.test(e.message || '')
+      if (noSeed) {
+        console.log(`[Hivemind] ${sourceName} skipped: ${e.message} (no seed yet — not penalized)`)
+      } else {
+        console.warn(`[Hivemind] ${sourceName} failed: ${e.message} → trying next source`)
+        markFailure(sourceName, e.message)
+      }
       // continue to next source in chain
     }
   }

@@ -310,6 +310,17 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
     trace.push({ step: 'age_penalty', value: round3(confidence), factor: round3(ageMod.factor), detail: ageMod.note })
     console.log(`[IC] Age penalty ×${ageMod.factor.toFixed(2)} (${ageMod.note}): ${pool.base?.symbol} → conf ${(confidence * 100).toFixed(0)}%`)
   }
+  // Enforce the confidence floor on the FINAL value. The gate/exploration checks above ran on
+  // `adj` (pre-penalty); the liquidity + age penalties applied afterward can push a candidate
+  // that passed at the floor below it. Re-check here so minConfidence actually bounds what it
+  // names. Skipped in exploration mode, whose job is to force ≥1 sample per pipeline through.
+  if (gateEnabled && !exploration) {
+    const minConfidence = gateCfg.minConfidence ?? 0.15
+    if (confidence < minConfidence) {
+      console.log(`[IC] ${pool.base?.symbol} ${forceStrategy} dropped: final conf ${(confidence*100).toFixed(0)}% < floor ${(minConfidence*100).toFixed(0)}% (after penalties)`)
+      return null
+    }
+  }
   trace.push({ step: 'final', value: round3(confidence), detail: exploration ? 'exploration quota (gate bypassed)' : 'gate passed' })
 
   const tvlMcapRatio = (pool.tvl != null && pool.mcap > 0) ? Math.round((pool.tvl / pool.mcap) * 10000) / 10000 : null

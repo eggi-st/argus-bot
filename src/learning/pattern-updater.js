@@ -33,8 +33,8 @@ function buildUpsert(emaAlpha, promotionThreshold) {
   return `
   INSERT INTO pattern_library
     (updated_at, volatility_bucket, regime, strategy, fee_bucket, age_bucket,
-     win_rate, mean_pnl_net, sample_count, active, wins, ema_win_rate)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
+     win_rate, mean_pnl_net, sample_count, active, wins, ema_win_rate, source)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, 'sim')
   ON CONFLICT(volatility_bucket, regime, strategy, fee_bucket, age_bucket) DO UPDATE SET
     updated_at   = excluded.updated_at,
     win_rate     = ((win_rate * sample_count) + excluded.win_rate)     / (sample_count + 1),
@@ -42,6 +42,9 @@ function buildUpsert(emaAlpha, promotionThreshold) {
     sample_count = sample_count + 1,
     wins         = COALESCE(wins, 0) + excluded.wins,
     ema_win_rate = ${emaAlpha} * excluded.win_rate + (1 - ${emaAlpha}) * COALESCE(ema_win_rate, excluded.win_rate),
+    -- Heal legacy NULL-source rows to 'sim' so they can't be blended into live confidence
+    -- before reconcile stamps them; never overwrite a reconcile-set 'sim'/'real' value.
+    source       = COALESCE(source, 'sim'),
     active       = CASE WHEN sample_count + 1 >= ${promotionThreshold} THEN 1 ELSE active END
 `
 }

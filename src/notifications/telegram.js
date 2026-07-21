@@ -154,6 +154,22 @@ class TelegramNotifier {
     )
   }
 
+  observerDown({ failedCycles, wallets }) {
+    return this.send(
+      `🛑 <b>WALLET OBSERVER DOWN</b>\n` +
+      `${failedCycles} siklus beruntun gagal RPC di semua endpoint (${wallets} wallet).\n\n` +
+      `Smart-money observation berhenti — cek Helius rate limit / RPC key.`,
+      'P1'
+    )
+  }
+
+  observerRecovered({ afterFailedCycles }) {
+    return this.send(
+      `✅ <b>Observer pulih</b> — RPC merespons lagi (setelah ${afterFailedCycles} siklus gagal).`,
+      'P3'
+    )
+  }
+
   dryRunResult({ token, strategy, netPnlPct, holdMinutes }) {
     const emoji = netPnlPct >= 0 ? '✅' : '❌'
     return this.send(

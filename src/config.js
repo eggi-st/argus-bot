@@ -35,6 +35,15 @@ const DEFAULTS = {
     timeframe: '30m',
     category: 'all',
     excludeHighSupplyConcentration: true,
+    // Volatility data-gap recovery. The bulk pool-discovery page frequently returns
+    // volatility=0 (no/stale data) for otherwise-qualified pools — historically the single
+    // largest screening rejection ("unusable volatility (0)"). These pools already passed
+    // mcap/holders/volume/tvl/fee gates, so losing them is lost opportunity, not a judgment.
+    // When enabled, pools that come back with volatility<=0 get one targeted re-fetch against
+    // the single-pool detail endpoint (same API, often fresher than the cached bulk page).
+    // Adopts only a positive value; still subject to every downstream gate — admits nothing new.
+    // Bounded per scan to cap extra API calls. Set enabled:false to restore the old behavior.
+    volatilityRefetch: { enabled: true, maxPerScan: 40 },
     // Anti-rug screen (attributed technique 'antirug_evilpanda', kind:'screen'). A universal
     // gate applied to ALL strategies. Thresholds learned from a 428-position forensic:
     // catastrophes (≤−5%) clustered at young age (~25h) + high TVL/mcap (~0.15) vs winners
@@ -135,21 +144,6 @@ const DEFAULTS = {
     // floor). Guarantees at least 1 dry-run sample per pipeline per scan, preventing the
     // gate from starving new dimensions of data they need to get promoted.
     explorationQuota: { enabled: true },
-  },
-  wallet: {
-    // Lifecycle state machine for tracked smart-money wallets.
-    // Transitions are driven by last_seen staleness (updated by hivemind re-discovery
-    // OR by a real on-chain wallet_action detected by the observer).
-    //   active    → seen within coolingDays
-    //   cooling   → inactive coolingDays–staleDays (still observed, grace period)
-    //   stale     → inactive staleDays–retiredDays (still observed, low priority)
-    //   retired   → inactive retiredDays+ (removed from observer, active=0)
-    lifecycle: {
-      coolingDays:  3,           // active → cooling after this many days without activity
-      staleDays:    7,           // cooling → stale
-      retiredDays:  14,          // stale → retired (ejected from observer)
-      cron:         '0 6 * * *', // daily at 06:00 UTC
-    },
   },
   learning: {
     // Pattern confidence gate — blocks (strategy × condition) combos with no proven edge.
@@ -306,21 +300,52 @@ const DEFAULTS = {
     minHoldBeforeIndicatorCheck: 20,  // min hold before indicators are consulted (minutes)
   },
   wallet: {
-    // Set your Solana wallet address in user-config.json to enable observation.
+    // Set your Solana wallet address to enable observation — via WATCH_WALLET in .env
+    // (preferred: keeps secrets out of user-config.json) or wallet.address in user-config.json.
     // Argus will poll for on-chain Meteora DLMM actions every pollIntervalMs ms.
-    address: null,
-    rpcUrl: 'https://api.mainnet-beta.solana.com',
+    address: process.env.WATCH_WALLET || null,
+    // Primary RPC. Prefer SOLANA_RPC_URL in .env (holds the Helius api-key secret) over
+    // hardcoding it in user-config.json. Falls back to the public endpoint when unset.
+    rpcUrl: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
+    // Fallback RPC endpoints used when the primary (rpcUrl, typically a rate-limited
+    // Helius key) errors. The observer rotates through these so a single throttled key
+    // no longer silently kills all wallet observation. Public endpoint is a safe last resort.
+    rpcFallbackUrls: ['https://api.mainnet-beta.solana.com'],
     pollIntervalMs: 30_000,
+    // Observer health: after this many CONSECUTIVE poll cycles where every RPC call errored
+    // (not merely "no new activity"), raise a one-shot P1 alert. Guards against the silent
+    // 3-week outage where a throttled Helius key stopped all observation unnoticed.
+    healthMaxFailedCycles: 5,
     // Smart money wallets to track. Each entry: { address, label }
     // These wallets are observed as learning signals — their LP activity boosts
     // confidence when they enter the same pool Argus recommends.
     trackedWallets: [],
+    // Lifecycle state machine for tracked smart-money wallets.
+    // Transitions are driven by last_seen staleness (updated by hivemind re-discovery
+    // OR by a real on-chain wallet_action detected by the observer).
+    //   active    → seen within coolingDays
+    //   cooling   → inactive coolingDays–staleDays (still observed, grace period)
+    //   stale     → inactive staleDays–retiredDays (still observed, low priority)
+    //   retired   → inactive retiredDays+ (removed from observer, active=0)
+    lifecycle: {
+      coolingDays:  3,           // active → cooling after this many days without activity
+      staleDays:    7,           // cooling → stale
+      retiredDays:  14,          // stale → retired (ejected from observer)
+      cron:         '0 6 * * *', // daily at 06:00 UTC
+      // Anti-spiral floor: never let retirement drain the pool to zero. Keep the N
+      // most-recently-seen wallets observable (state capped at 'stale') even past
+      // retiredDays, so the observer can recover automatically once discovery/RPC heals
+      // instead of dying permanently after one upstream outage.
+      minActiveFloor: 3,
+    },
   },
   helius: {
     // Helius enhanced RPC — free tier at helius.xyz (100k credits/month).
     // Used by Hivemind Discovery for cleaner ADD_LIQUIDITY detection.
     // If set, becomes Source C in the fallback chain (after Meteora sources).
-    apiKey: null,
+    // Prefer HELIUS_API_KEY in .env over user-config.json (keeps the secret out of a
+    // file that's easy to cross-copy between machines).
+    apiKey: process.env.HELIUS_API_KEY || null,
   },
   meridian: {
     // Meridian bot integration — feed Argus signals to Meridian for LP execution.
