@@ -60,6 +60,21 @@ function checkPatternGate(pattern, confidence, gateCfg = {}) {
   if (!pattern?.active) {
     return { blocked: false }  // calibrating — explore freely to gather samples
   }
+  // Simulation-backed patterns never gate. This mirrors adjustScore(), which already refuses to
+  // let a sim win rate BOOST confidence because dry-run simulation measured materially more
+  // optimistic than reality. The same distrust has to apply to the veto: a number too unreliable
+  // to raise confidence is too unreliable to suppress a recommendation.
+  //
+  // The veto path is in fact the more dangerous of the two. Blocking here returns null — no
+  // decision, so no dry run, so no outcome — and it also answers /api/meridian/evaluate, meaning
+  // a simulated statistic can tell Meridian "no" on a pool it was about to trade. Worse, it
+  // self-locks: a sim-only cell that blocks can never accumulate the real outcomes that would
+  // promote it to source='real', so it stays sim-backed and keeps blocking forever. Observed on
+  // the 2026-07-28 VPS snapshot: limit_order had 25 cells, ALL sim-backed, one promoted active
+  // with mean P&L −1.77%.
+  if (pattern.source === 'sim') {
+    return { blocked: false }
+  }
   const lb = wilsonLowerBound(pattern.win_rate ?? 0, pattern.sample_count ?? 0, wilsonZ)
   if (lb < minWinRate) {
     return { blocked: true, reason: `WR ${(((pattern.win_rate ?? 0)) * 100).toFixed(0)}% (95%LB ${(lb * 100).toFixed(0)}%) < min ${minWinRate * 100}% (N=${pattern.sample_count})` }
@@ -437,7 +452,9 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
       }).catch(() => {})
     }
 
-    const patStr = pattern?.active ? ` [hist ${(pattern.win_rate*100).toFixed(0)}%/${pattern.sample_count}]` : ''
+    const patStr = pattern?.active
+      ? ` [hist ${(pattern.win_rate*100).toFixed(0)}%/${pattern.sample_count}${pattern.source === 'sim' ? ' sim' : ''}]`
+      : ''
     console.log(`[IC] #${decisionId} ${pool.base?.symbol} → ${forceStrategy} (conf=${(confidence*100).toFixed(0)}, ttl=${ttlMinutes}m${patStr})`)
     return { id: decisionId, pool, strategy: forceStrategy, score: score.score, ttlMinutes, expiresAt, bucket }
   } catch (e) {

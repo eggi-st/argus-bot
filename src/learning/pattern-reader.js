@@ -82,7 +82,11 @@ function getPatternContext(volatilityBucket, regime, strategy, cfg, feeBucket = 
   if (!p.active) return `Calibrating (N=${p.sample_count}/${threshold})`
   const wr  = (p.win_rate * 100).toFixed(0)
   const pnl = p.mean_pnl_net >= 0 ? `+${p.mean_pnl_net.toFixed(1)}` : p.mean_pnl_net.toFixed(1)
-  return `Win ${wr}%, avg ${pnl}% (N=${p.sample_count})`
+  // Label the provenance. This string goes into the LLM prompt and the dashboard, and a
+  // sim-backed cell rendered as bare "Win 88%" reads as validated history when it is really
+  // paper-trade output that neither adjustScore nor checkPatternGate is willing to act on.
+  const src = p.source === 'sim' ? ' [simulated]' : ''
+  return `Win ${wr}%, avg ${pnl}% (N=${p.sample_count})${src}`
 }
 
 module.exports = { getPattern, adjustScore, getBaseRate, getPatternContext }
