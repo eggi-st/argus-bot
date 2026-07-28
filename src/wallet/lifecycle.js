@@ -95,28 +95,57 @@ function assessLifecycles() {
 
 /**
  * Compute quality_score for each smart_money wallet:
- *   wins = open_position actions where the matched dry-run position closed profitably
+ *   wins = LP entries by this wallet followed by a profitable Argus dry-run outcome
+ *          on the same pool
  *   quality_score = (wins + 1) / (total + 2)   [Laplace smoothing → starts at 0.5]
  *
- * Only wallets with at least one matched 'followed' action get updated; others
- * keep their default 0.5 until enough data exists.
+ * Pairing rules (all three matter — an earlier version got each one wrong and scored
+ * exactly zero wallets for a month):
+ *   - action_type: the tx-parser only emits 'open_position' for InitializeLbPair, i.e.
+ *     pool CREATION. Smart money LPs into existing pools, so their entries are almost
+ *     always 'add_liquidity'. Filtering on 'open_position' alone matches nothing.
+ *   - match_category: 'followed' means the action landed on a pool Argus happened to have
+ *     an ACTIVE recommendation for — a rare coincidence, and not what quality means here.
+ *     Any LP entry counts; the pool-level dry-run outcome is the label.
+ *   - pairing: one wallet action must map to at most ONE dry-run position. A plain JOIN on
+ *     pool_address is a cross product (a hot pool has hundreds of actions × dozens of
+ *     positions) and inflates counts by ~100×. We take the FIRST position opened within
+ *     qualityWindowDays AFTER the entry — the outcome that entry could plausibly predict.
+ *
+ * Wallets with no pairable entry keep their default 0.5 until enough data exists.
  */
 function scoreWallets() {
+  const cfg  = getConfig()
+  const windowDays = cfg.wallet?.lifecycle?.qualityWindowDays ?? 1
+
   const rows = db.prepare(`
-    SELECT
-      wa.wallet_address,
-      COUNT(*)                                                     AS total,
-      SUM(CASE WHEN dr.net_pnl_pct > 0 THEN 1 ELSE 0 END)        AS wins
-    FROM wallet_actions wa
-    JOIN dry_run_positions dr
-      ON  dr.pool_address  = wa.pool_address
-      AND dr.status        = 'closed'
-      AND dr.outcome_valid = 1
-    WHERE wa.wallet_type     = 'smart_money'
-      AND wa.action_type     = 'open_position'
-      AND wa.match_category  = 'followed'
-    GROUP BY wa.wallet_address
-  `).all()
+    WITH entries AS (
+      SELECT wa.wallet_address AS addr, wa.detected_at AS ts, wa.pool_address AS pool
+      FROM wallet_actions wa
+      WHERE wa.wallet_type  = 'smart_money'
+        AND wa.action_type  IN ('add_liquidity', 'open_position')
+        AND wa.pool_address IS NOT NULL
+    ),
+    paired AS (
+      SELECT e.addr,
+             (SELECT dr.net_pnl_pct
+                FROM dry_run_positions dr
+               WHERE dr.pool_address  = e.pool
+                 AND dr.status        = 'closed'
+                 AND dr.outcome_valid = 1
+                 AND julianday(dr.opened_at) >= julianday(e.ts)
+                 AND julianday(dr.opened_at) <= julianday(e.ts) + @windowDays
+               ORDER BY dr.opened_at ASC
+               LIMIT 1) AS pnl
+      FROM entries e
+    )
+    SELECT addr                                          AS wallet_address,
+           COUNT(*)                                      AS total,
+           SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END)      AS wins
+    FROM paired
+    WHERE pnl IS NOT NULL
+    GROUP BY addr
+  `).all({ windowDays })
 
   if (!rows.length) return 0
 

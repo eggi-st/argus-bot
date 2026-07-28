@@ -321,6 +321,20 @@ const DEFAULTS = {
     graduateStreak:  3,             // consecutive passing recomputes before a cell is brake_ready
     brakeFactor:     0.5,            // advisory size multiplier for a brake_ready cell
   },
+  // DB retention. Only the pure-diagnostic tables are trimmed — the learning corpus
+  // (decisions, dry_run_positions, feedback_outcomes, wallet_actions) is never pruned
+  // because reconciliation and the regime observatory recompute over 90-day windows.
+  retention: {
+    enabled: true,
+    cron:    '30 4 * * *',   // daily, offset from the 06:00 wallet-lifecycle job
+    // screening_rejections is written ~2.8k rows/day (~900 KB/day) and read only over a
+    // 24h self-diagnosis window. 30 days leaves ample slack for dashboard drill-downs.
+    screeningRejectionsDays: 30,
+    // 'incremental' (default) reclaims pages only if the DB was created with
+    // auto_vacuum=INCREMENTAL; 'full' runs a real VACUUM (rewrites the whole file — slow,
+    // needs 2× disk free). Set 'full' once manually to shrink an already-bloated file.
+    vacuum: 'incremental',
+  },
   wallet: {
     // Set your Solana wallet address to enable observation — via WATCH_WALLET in .env
     // (preferred: keeps secrets out of user-config.json) or wallet.address in user-config.json.
@@ -342,6 +356,36 @@ const DEFAULTS = {
     // These wallets are observed as learning signals — their LP activity boosts
     // confidence when they enter the same pool Argus recommends.
     trackedWallets: [],
+    // Hivemind discovery chain control.
+    discovery: {
+      // Sources never attempted. A disabled source gets no discovery_sources row and cannot
+      // be revived from the Web UI — config wins over a resume click.
+      //
+      // Both entries below are off because they have no viable path to working without a paid
+      // key. Neither ever contributed a wallet; both sat late in the priority chain burning a
+      // retry every cycle. Removing them is purely subtractive — no discovery capability lost.
+      //
+      // 'okx' — needs okx.apiKey, which is not configured, so every daily retry failed
+      // ("OKX API key not configured", 17 straight failures on the VPS as of 2026-07-28). The
+      // rug/honeypot data it was meant to supply now comes from the no-auth Jupiter enrichment
+      // in screener.js.
+      // NOTE: this only disables OKX as a WALLET-DISCOVERY source. The separate OKX enrichment
+      // path in intelligence/screener.js (enrichWithOkx) is unaffected and still runs keyless.
+      //
+      // 'solscan' — the host it calls, api.solscan.io, no longer resolves at all (DNS
+      // NXDOMAIN, verified 2026-07-28); Solscan retired it. fetch() therefore rejects at the
+      // network layer, before any HTTP status check, and the catch in solscan-source.js only
+      // re-throws on 'rate limit'/'denied' — so all 5 tokens fall through to the generic
+      // "Solscan returned no usable holder data", which misleadingly implies the API answered.
+      // Successors need a paid key: pro-api.solscan.io/v2.0 → 401 "Token is missing";
+      // public-api.solscan.io → 404.
+      // BEFORE RE-ENABLING, solscan-source.js needs three fixes: (1) point at pro-api /v2.0 with
+      // an auth header, (2) its token query is `SELECT DISTINCT … LIMIT 5` with no ORDER BY, so
+      // DISTINCT's sort makes it always pick the 5 alphabetically-lowest mints — stale ones —
+      // never the newest, (3) `created_at > datetime('now','-7 days')` compares ISO-with-T/Z
+      // against SQLite's space-separated format; use julianday() on both sides.
+      disabledSources: ['okx', 'solscan'],
+    },
     // Lifecycle state machine for tracked smart-money wallets.
     // Transitions are driven by last_seen staleness (updated by hivemind re-discovery
     // OR by a real on-chain wallet_action detected by the observer).
@@ -359,6 +403,11 @@ const DEFAULTS = {
       // retiredDays, so the observer can recover automatically once discovery/RPC heals
       // instead of dying permanently after one upstream outage.
       minActiveFloor: 3,
+      // quality_score pairing window: a smart-money LP entry is credited with the FIRST
+      // Argus dry-run position opened on the same pool within this many days after it.
+      // 1 day matches the dry-run hold horizon (positions close in ~1–2h); widening it
+      // starts crediting wallets for outcomes their entry could not have predicted.
+      qualityWindowDays: 1,
     },
   },
   helius: {

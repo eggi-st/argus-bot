@@ -80,6 +80,10 @@ async function init() {
   walletLifecycle.init()
   console.log('✓')
 
+  process.stdout.write('[Init] Layer 4 · DB Retention... ')
+  require('../db/retention').init()
+  console.log('✓')
+
   // ── Layer 5: Notifications + Web Server ──────────────────────────────────
   process.stdout.write('[Init] Layer 5 · Telegram... ')
   const telegram = require('../notifications/telegram')
