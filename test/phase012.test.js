@@ -140,6 +140,57 @@ ok('rangePctForStrategy defaults binStep and clamps', () => {
   assert.strictEqual(rangePctForStrategy('spot', 500), 0.99)  // 69×5% clamped
 })
 
+console.log('\nCross-strategy score normalisation:')
+const { normalizeScore, resetCache } = require('../src/intelligence/score-normalizer')
+const realCfg = require('../src/config').getConfig()
+const normOff = { scoring: { normalize: { enabled: false } } }
+const normImpossible = { scoring: { normalize: { minSamples: 1e9 } } }
+
+// Returns a strategy that has a usable reference distribution, or undefined when this database
+// has no schema/data yet (fresh checkout). Lets the percentile tests skip instead of exploding.
+function refStrategy() {
+  try {
+    return require('../src/db/database').prepare(
+      `SELECT strategy FROM decisions WHERE raw_score IS NOT NULL
+        GROUP BY strategy HAVING COUNT(*) >= 50 LIMIT 1`
+    ).get()
+  } catch { return undefined }
+}
+
+ok('disabled → identity', () => {
+  resetCache()
+  assert.strictEqual(normalizeScore('spot', 0.42, normOff), 0.42)
+})
+ok('below minSamples → identity (cold start is never reshaped)', () => {
+  resetCache()
+  assert.strictEqual(normalizeScore('spot', 0.42, normImpossible), 0.42)
+  assert.strictEqual(normalizeScore('a_strategy_that_does_not_exist', 0.42, realCfg), 0.42)
+})
+ok('non-finite input and missing strategy pass through untouched', () => {
+  resetCache()
+  assert.ok(Number.isNaN(normalizeScore('spot', NaN, realCfg)), 'NaN must pass through, not become 0')
+  assert.strictEqual(normalizeScore(null, 0.42, realCfg), 0.42)
+  assert.strictEqual(normalizeScore('spot', undefined, realCfg), undefined)
+})
+ok('output is bounded to [0,1] and monotone non-decreasing in the raw score', () => {
+  resetCache()
+  const row = refStrategy()
+  if (!row) return  // no reference distribution in this DB — nothing to exercise
+  let prev = -1
+  for (let x = 0; x <= 1.0001; x += 0.05) {
+    const v = normalizeScore(row.strategy, x, realCfg)
+    assert.ok(v >= 0 && v <= 1, `out of range at raw=${x}: ${v}`)
+    assert.ok(v >= prev, `not monotone at raw=${x}: ${v} < ${prev}`)
+    prev = v
+  }
+})
+ok('identical raw scores map to an identical percentile', () => {
+  resetCache()
+  const row = refStrategy()
+  if (!row) return
+  assert.strictEqual(normalizeScore(row.strategy, 0.5, realCfg), normalizeScore(row.strategy, 0.5, realCfg))
+})
+
 console.log('\nScreener health guard (intake silent-outage):')
 function captureScreenerEvents(fn) {
   const seen = []

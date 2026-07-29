@@ -9,6 +9,7 @@ const { techniqueAuthor } = require('./techniques')
 const { getConfig } = require('../config')
 const { parseBucket }      = require('../learning/pattern-updater')
 const { getPattern, adjustScore } = require('../learning/pattern-reader')
+const { normalizeScore }   = require('./score-normalizer')
 const { generateVerdict }  = require('../ai/verdict-generator')
 const telegram             = require('../notifications/telegram')
 const db                   = require('../db/database')
@@ -256,7 +257,12 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
   }
 
   const pat = getPattern(volatility_bucket, regime, forceStrategy, fee_bucket, age_bucket)
-  const adj = adjustScore(score.score, pat, cfg, forceStrategy)
+  // Normalise BEFORE the modifiers, so pattern blending, the liquidity/age penalties and every
+  // threshold downstream all operate on one comparable scale. Normalising last would leave the
+  // modifiers arguing on incomparable scales and then flatten the result.
+  const rawScore = score.score
+  const normScore = normalizeScore(forceStrategy, rawScore, cfg)
+  const adj = adjustScore(normScore, pat, cfg, forceStrategy)
   if (pat?.active) {
     console.log(`[IC] Pattern ${volatility_bucket}×${regime}×${fee_bucket}×${age_bucket}×${forceStrategy}: WR=${(pat.win_rate*100).toFixed(0)}% N=${pat.sample_count} → ${(score.score*100).toFixed(0)}→${(adj*100).toFixed(0)}%`)
   }
@@ -282,7 +288,13 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
   const pattern = pat
 
   // Decision-trace (#7): record the confidence build-up verbatim so the "why" is auditable.
-  const trace = [{ step: 'base_score', value: round3(score.score), detail: `${forceStrategy} rule score` }]
+  // base_score stays the RAW score — it is what raw_score stores and what the percentile map is
+  // rebuilt from, so the trace must keep showing the un-normalised input.
+  const trace = [{ step: 'base_score', value: round3(rawScore), detail: `${forceStrategy} rule score` }]
+  if (normScore !== rawScore) {
+    trace.push({ step: 'cross_strategy_norm', value: round3(normScore),
+      detail: `percentile within ${forceStrategy}'s own score distribution` })
+  }
   if (pat) {
     trace.push({ step: 'pattern_adjust', value: round3(adj), factor: null,
       detail: pat.active
@@ -412,6 +424,7 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
       strategy_scores_json: JSON.stringify(allScores),
       llm_verdict: null,
       confidence,
+      raw_score: round3(rawScore),
       condition_bucket: bucket,
       primary_technique: primaryTechnique,
       technique_author: techAuthor,
@@ -530,12 +543,20 @@ function evaluatePool(metrics = {}, strategy = null) {
   const strat = chosen.strategy
 
   const pat = getPattern(volatility_bucket, regime, strat, fee_bucket, age_bucket)
-  const adj = adjustScore(chosen.score, pat, cfg, strat)
+  // Same normalisation as processPool — /api/meridian/evaluate must answer on the scale
+  // Meridian's signalThreshold is compared against, or the gate would disagree with the
+  // recommendations for the identical pool.
+  const normScore = normalizeScore(strat, chosen.score, cfg)
+  const adj = adjustScore(normScore, pat, cfg, strat)
   const gate = gateEnabled ? checkPatternGate(pat, adj, gateCfg) : { blocked: false }
 
   // Confidence build — same sequence as processPool, read-only.
   let confidence = adj
   const trace = [{ step: 'base_score', value: round3(chosen.score), detail: `${strat} rule score` }]
+  if (normScore !== chosen.score) {
+    trace.push({ step: 'cross_strategy_norm', value: round3(normScore),
+      detail: `percentile within ${strat}'s own score distribution` })
+  }
   if (pat) trace.push({ step: 'pattern_adjust', value: round3(adj), factor: null,
     detail: pat.active ? `${volatility_bucket}×${regime}×${strat} active WR ${(pat.win_rate*100||0).toFixed(0)}% N=${pat.sample_count} (${pat.source||'sim'})`
                        : `pattern calibrating (N=${pat.sample_count||0})` })

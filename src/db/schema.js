@@ -215,6 +215,10 @@ function migrateSchema() {
     // Screening funnel (2026-06-29): tag each rejection with the pipeline that produced it
     // so the /api/screening-funnel endpoint can show per-pipeline waterfall breakdowns.
     `ALTER TABLE screening_rejections ADD COLUMN pipeline TEXT`,
+    // Pre-normalisation strategy score. Stored separately from `confidence` so the
+    // cross-strategy percentile map can be rebuilt from a stable input — normalising against
+    // already-normalised values would feed back on itself.
+    `ALTER TABLE decisions ADD COLUMN raw_score REAL`,
   ]
   let added = 0
   for (const sql of cols) {
@@ -288,6 +292,33 @@ function migrateSchema() {
     }
   } catch (e) {
     console.warn('[Schema] volatility bucket relabel:', e.message)
+  }
+
+  // Backfill raw_score from the confidence trace.
+  //
+  // The cross-strategy percentile map needs a reference distribution per strategy, and without
+  // this it would start empty — every strategy below minSamples, so normalisation would sit
+  // inert for days while it refilled. The trace already records the pre-adjustment score as its
+  // `base_score` step on 3656 of 4327 historical decisions, which is exactly the value the new
+  // column stores going forward. Idempotent: only fills rows where raw_score IS NULL.
+  try {
+    const rows = db.prepare(
+      `SELECT id, confidence_trace_json FROM decisions
+       WHERE raw_score IS NULL AND confidence_trace_json IS NOT NULL`
+    ).all()
+    const upd = db.prepare(`UPDATE decisions SET raw_score = ? WHERE id = ?`)
+    let filled = 0
+    db.transaction(rs => {
+      for (const row of rs) {
+        let base
+        try { base = JSON.parse(row.confidence_trace_json)?.find(s => s.step === 'base_score')?.value } catch { continue }
+        if (typeof base !== 'number' || !Number.isFinite(base)) continue
+        upd.run(base, row.id); filled++
+      }
+    })(rows)
+    if (filled > 0) console.log(`[Schema] Backfilled raw_score on ${filled} decision(s) from the confidence trace`)
+  } catch (e) {
+    console.warn('[Schema] raw_score backfill:', e.message)
   }
 
   // screening_rejections table — records every pool filtered out during a scan
@@ -635,12 +666,14 @@ function recordDecision(data) {
     INSERT INTO decisions
       (created_at, expires_at, token_mint, token_symbol, pool_address, strategy,
        indicators_json, strategy_scores_json, llm_verdict, confidence, condition_bucket,
-       primary_technique, technique_author, signal_provenance_json, confidence_trace_json)
+       primary_technique, technique_author, signal_provenance_json, confidence_trace_json,
+       raw_score)
     VALUES
       (@created_at, @expires_at, @token_mint, @token_symbol, @pool_address, @strategy,
        @indicators_json, @strategy_scores_json, @llm_verdict, @confidence, @condition_bucket,
-       @primary_technique, @technique_author, @signal_provenance_json, @confidence_trace_json)
-  `).run({ confidence_trace_json: null, ...data })
+       @primary_technique, @technique_author, @signal_provenance_json, @confidence_trace_json,
+       @raw_score)
+  `).run({ confidence_trace_json: null, raw_score: null, ...data })
 }
 
 function expireDecision(id) {

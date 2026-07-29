@@ -345,6 +345,30 @@ const DEFAULTS = {
     graduateStreak:  3,             // consecutive passing recomputes before a cell is brake_ready
     brakeFactor:     0.5,            // advisory size multiplier for a brake_ready cell
   },
+  scoring: {
+    // Cross-strategy score normalisation. Each strategy in strategy-router.js scores on its own
+    // invented scale — spot's `1 - vol/maxVol` PUNISHES volatility while bid_ask's `min(1, vol/3)`
+    // REWARDS it — yet the results were compared against one shared threshold. Measured over 3656
+    // decisions the distributions barely overlap (p50: spot 0.36, bid_ask 0.71, limit_order 0.76),
+    // so Meridian's signalThreshold 0.65 was passing 67.8% of limit_order, 53.5% of bid_ask and
+    // 5.1% of spot — a hidden strategy filter, and it favoured the WORST performers (spot wins
+    // 62.1% in reality, bid_ask 55.8%, limit_order has never been executed at all).
+    //
+    // Mapping each score to its percentile within its own strategy's distribution makes "0.8"
+    // mean the same thing everywhere. Simulated on the same 3656 decisions, 0.65 goes to
+    // 34.0 / 34.4 / 26.9% — near-neutral, as a percentile scale should be.
+    //
+    // This does NOT make confidence predictive; see the warning in the `meridian` block. It
+    // removes a systematic bias, it does not add information.
+    normalize: {
+      enabled:        true,
+      windowDays:     30,   // rolling reference window — adapts as the market shifts
+      minSamples:     50,   // below this a strategy passes through RAW (a percentile off a
+                            // handful of points is noise, and cold starts must not be reshaped)
+      refreshMinutes: 60,   // distribution cache TTL; rebuilding per pool would run ~90
+                            // queries per scan for something that moves over days
+    },
+  },
   // DB retention. Only the pure-diagnostic tables are trimmed — the learning corpus
   // (decisions, dry_run_positions, feedback_outcomes, wallet_actions) is never pruned
   // because reconciliation and the regime observatory recompute over 90-day windows.
