@@ -676,13 +676,28 @@ app.get('/api/wallet-actions', (req, res) => {
   try {
     const wallet = require('./wallet/index')
     const limit = Math.min(parseInt(req.query.limit || '30', 10), 200)
+    // Take `limit` newest rows PER wallet type, not `limit` newest overall. The dashboard
+    // renders own and smart-money as two separate tables, but smart money out-produces the
+    // own wallet roughly 64:1 (577 vs 9 actions on 2026-07-28), so a single global ORDER BY
+    // ... LIMIT is entirely smart-money and the OWN panel renders "Belum ada aksi own" even
+    // when the own wallet traded minutes earlier. Measured on the live DB: at limit=30 the
+    // global query returned 0 own rows, and even at the 200 cap it returned 3.
+    // `IS NOT` (not `<>`) so a NULL wallet_type still counts as own, matching the client.
+    const COLS = `id, detected_at, action_type, pool_address, token_mint, token_symbol,
+                  strategy, amount_sol, matched_decision_id, match_category,
+                  wallet_address, wallet_label, wallet_type`
     const actions = db.prepare(`
-      SELECT id, detected_at, action_type, pool_address, token_mint, token_symbol,
-             strategy, amount_sol, matched_decision_id, match_category,
-             wallet_address, wallet_label, wallet_type
-      FROM wallet_actions
-      ORDER BY detected_at DESC LIMIT ?
-    `).all(limit)
+      SELECT * FROM (
+        SELECT ${COLS} FROM wallet_actions
+        WHERE wallet_type IS 'smart_money' ORDER BY detected_at DESC LIMIT @limit
+      )
+      UNION ALL
+      SELECT * FROM (
+        SELECT ${COLS} FROM wallet_actions
+        WHERE wallet_type IS NOT 'smart_money' ORDER BY detected_at DESC LIMIT @limit
+      )
+      ORDER BY detected_at DESC
+    `).all({ limit })
     // Enrich from the rich Meridian outcomes (feedback_outcomes) by pool — own actions
     // ARE Meridian's trades, so fill the missing token + surface the real P&L per pool.
     const pools = [...new Set(actions.map(a => a.pool_address).filter(Boolean))]
@@ -706,7 +721,19 @@ app.get('/api/wallet-actions', (req, res) => {
         outcome_win:     fo?.win ?? null,
       }
     })
-    res.json({ actions: enriched, status: wallet.observer.getStatus() })
+    // True counts for today, computed in SQL. The dashboard used to derive these by filtering
+    // the returned page, so "actions today" could never exceed the page size — it read 30 on a
+    // day with 586. detected_at is ISO-8601 Z and the client's `today` is also UTC, so the
+    // substr comparison lines up with what the browser asks for.
+    const today = new Date().toISOString().slice(0, 10)
+    const todayStats = db.prepare(`
+      SELECT COUNT(*)                                                                  AS total,
+             COALESCE(SUM(CASE WHEN match_category = 'followed' THEN 1 ELSE 0 END), 0)  AS followed,
+             COALESCE(SUM(CASE WHEN wallet_type IS NOT 'smart_money' THEN 1 ELSE 0 END), 0) AS own
+      FROM wallet_actions WHERE substr(detected_at, 1, 10) = ?
+    `).get(today)
+
+    res.json({ actions: enriched, today: todayStats, status: wallet.observer.getStatus() })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }

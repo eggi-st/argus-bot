@@ -1238,11 +1238,12 @@ function loadWalletActions() {
       const sm  = wallets.filter(w => w.type === 'smart_money').length
       addrEl.textContent = wallets.length ? `${own} own · ${sm} smart money` : 'Not configured'
     }
+    // Prefer the server's SQL counts — filtering d.actions caps the number at the page size,
+    // which under-reported a 586-action day as 30. Fall back for an older server response.
     const today = new Date().toISOString().slice(0, 10)
     const todayActs = (d.actions || []).filter(a => a.detected_at?.startsWith(today))
-    const followed = todayActs.filter(a => a.match_category === 'followed')
-    el('wo-count', todayActs.length)
-    el('wo-followed', followed.length)
+    el('wo-count', d.today?.total ?? todayActs.length)
+    el('wo-followed', d.today?.followed ?? todayActs.filter(a => a.match_category === 'followed').length)
     const wtEl = document.getElementById('wallet-table')
     if (!wallets.length) return
     const acts = d.actions || []
