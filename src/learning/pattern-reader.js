@@ -13,21 +13,47 @@ function getPattern(volatilityBucket, regime, strategy, feeBucket = 'medium', ag
 }
 
 /**
- * Per-strategy base win rate from the reconcilable outcome stream (dry_run_positions only,
- * never decisions — avoids Meridian-unlinked skew). Falls back to a configured prior until
- * enough real outcomes exist. This is the shrinkage target — NOT 0.5 — so genuinely-bad
+ * Per-strategy base win rate — the shrinkage target for adjustScore. NOT 0.5, so genuinely-bad
  * strategies are not flattered by a neutral coin-flip prior.
+ *
+ * REAL outcomes first, simulation only as a fallback. This used to read dry_run_positions
+ * unconditionally, which meant a REAL-backed pattern was shrunk toward a SIMULATED base rate —
+ * the last path by which dry-run numbers still reached live confidence, after adjustScore and
+ * checkPatternGate were both taught to distrust them.
+ *
+ * The two corpora disagree materially (measured 2026-07-28): spot is 62.1% real vs 88.0% sim
+ * among filled positions, bid_ask 55.8% vs 69.9%. Shrinking a real pattern toward the sim
+ * number pulled thin patterns toward an optimism reality does not support.
+ *
+ * The sim fallback now excludes NO-FILLS (net and gross both exactly 0). 44% of closed dry runs
+ * are no-fills, and counting them as losses is what made the raw sim win rate read 35% for spot
+ * when its filled positions win 88% — an artefact, not a measurement. Reality has almost no
+ * equivalent (8 of 393 real spot outcomes are exactly 0), so including them made the fallback
+ * incomparable to the real rate it stands in for.
  */
 function getBaseRate(strategy, cfg) {
   const L = (cfg && cfg.learning) || {}
   const minSamples = L.baseRateMinSamples ?? 30
   const fallback   = L.baseRateFallback ?? 0.5
   if (!strategy) return fallback
+
+  // 1. REAL outcomes (Meridian executions) — what confidence is ultimately judged against.
+  try {
+    const r = db.prepare(`
+      SELECT COUNT(*) AS n, SUM(CASE WHEN pnl_pct > 0 THEN 1 ELSE 0 END) AS wins
+      FROM feedback_outcomes
+      WHERE strategy = ? AND pnl_pct IS NOT NULL
+    `).get(strategy)
+    if (r && (r.n ?? 0) >= minSamples) return (r.wins ?? 0) / r.n
+  } catch { /* fall through to sim */ }
+
+  // 2. SIM fallback — filled positions only.
   try {
     const r = db.prepare(`
       SELECT COUNT(*) AS n, SUM(CASE WHEN net_pnl_pct > 0 THEN 1 ELSE 0 END) AS wins
       FROM dry_run_positions
       WHERE strategy = ? AND status = 'closed' AND outcome_valid = 1
+        AND NOT (net_pnl_pct = 0 AND gross_pnl_pct = 0)
     `).get(strategy)
     if (!r || (r.n ?? 0) < minSamples) return fallback
     return (r.wins ?? 0) / r.n

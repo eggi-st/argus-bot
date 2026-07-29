@@ -73,6 +73,40 @@ ok('large-N weights EMA more than small-N (for ema>base)', () => {
   const large = adjustScore(0.5, { active: 1, sample_count: 200, ema_win_rate: 0.9 }, cfg, 'bid_ask')
   assert.ok(large > small, `large=${large} small=${small}`)
 })
+ok('getBaseRate prefers the REAL corpus over simulation', () => {
+  // Self-consistent rather than hardcoded: derive the expectation from whatever this database
+  // holds, and skip when it holds nothing. Passes on a fresh checkout AND on a live deployment
+  // — unlike the assertion below used to.
+  const db = require('../src/db/database')
+  const min = cfg.learning.baseRateMinSamples ?? 30
+  const row = db.prepare(`
+    SELECT strategy, COUNT(*) AS n, SUM(CASE WHEN pnl_pct > 0 THEN 1 ELSE 0 END) AS w
+    FROM feedback_outcomes WHERE pnl_pct IS NOT NULL AND strategy IS NOT NULL
+    GROUP BY strategy HAVING n >= ? LIMIT 1
+  `).get(min)
+  if (!row) return  // no real corpus here — nothing to assert
+  assert.ok(Math.abs(getBaseRate(row.strategy, cfg) - row.w / row.n) < 1e-9,
+    `expected real base rate ${row.w / row.n} for ${row.strategy}, got ${getBaseRate(row.strategy, cfg)}`)
+})
+ok('getBaseRate sim fallback ignores no-fill positions', () => {
+  const db = require('../src/db/database')
+  const min = cfg.learning.baseRateMinSamples ?? 30
+  // A strategy with enough SIM data but no real corpus — that is where the fallback is used.
+  const row = db.prepare(`
+    SELECT dr.strategy,
+           SUM(CASE WHEN NOT (dr.net_pnl_pct = 0 AND dr.gross_pnl_pct = 0) THEN 1 ELSE 0 END) AS filled,
+           SUM(CASE WHEN dr.net_pnl_pct > 0 THEN 1 ELSE 0 END) AS wins
+    FROM dry_run_positions dr
+    WHERE dr.status = 'closed' AND dr.outcome_valid = 1 AND dr.strategy IS NOT NULL
+      AND dr.strategy NOT IN (
+        SELECT strategy FROM feedback_outcomes WHERE pnl_pct IS NOT NULL AND strategy IS NOT NULL
+        GROUP BY strategy HAVING COUNT(*) >= ?)
+    GROUP BY dr.strategy HAVING filled >= ? LIMIT 1
+  `).get(min, min)
+  if (!row) return  // nothing exercises the fallback in this DB
+  assert.ok(Math.abs(getBaseRate(row.strategy, cfg) - row.wins / row.filled) < 1e-9,
+    `sim fallback must divide by FILLED count, not all closes (${row.strategy})`)
+})
 ok('getBaseRate falls back to the configured prior with no/low samples', () => {
   // Must name a strategy that genuinely has no rows. This previously asserted on 'spot',
   // which only has <baseRateMinSamples closed dry-runs on a FRESH database — so the test
