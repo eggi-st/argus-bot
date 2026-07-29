@@ -154,11 +154,17 @@ const DEFAULTS = {
   learning: {
     // Pattern confidence gate — blocks (strategy × condition) combos with no proven edge.
     // Only applies once a pattern is ACTIVE (promoted at promotionThreshold samples).
+    //
+    // NOTE on minConfidence: this gates on PATTERN statistics, which are measured. The
+    // confidence VALUE itself is a different matter — it does not predict real outcomes
+    // (Spearman 0.083, p=0.41, n=102). Raising minConfidence to filter on "high confidence"
+    // would be filtering on noise. See the warning in the `meridian` block below before
+    // treating the confidence number as a quality signal anywhere.
     confidenceGate: {
       enabled: true,
       minWinRate: 0.35,      // require Wilson lower-bound of win_rate >= this
       minMeanPnl: -1.0,      // block if avg net P&L below this (%)
-      minConfidence: 0.15,   // hard floor on blended confidence
+      minConfidence: 0.15,   // hard floor on blended confidence — a floor, NOT a quality bar
       wilsonZ: 1.0,          // 1.0 ≈ one std-error lower bound; raise to 1.96 for stricter 95%
       // Payoff ratio gate: avg_win_pnl / |avg_loss_pnl| must be >= this.
       // Blocks patterns where losses dwarf wins even if win_rate looks acceptable.
@@ -424,6 +430,30 @@ const DEFAULTS = {
     // webhookUrl: Meridian's incoming webhook endpoint (set in Meridian user-config.json).
     // argusUrl: public URL of this Argus instance — used by Meridian to poll signals.
     // smartWalletSync: if true, Meridian can import Argus smart wallets automatically.
+    //
+    // ⚠️ DO NOT set Meridian's `argus.blockOnLowConfidence: true`. Argus's confidence is
+    // NOT calibrated against real outcomes, so gating on it would block trades on noise.
+    // Measured 2026-07-28 on every real outcome linked back to a decision (n=102, all spot —
+    // bid_ask and limit_order have ZERO linked real outcomes, so they are untestable):
+    //
+    //   Spearman confidence x pnl = 0.083 (p = 0.41, permutation)   → indistinguishable from 0
+    //   Spearman confidence x win = -0.022
+    //   win rate by confidence quartile: 68% / 64% / 70% / 64%      → no trend
+    //
+    // Meridian's default `argus.signalThreshold: 0.65` applied to those same 102 real trades
+    // passes 3 and rejects 99 — it would veto 97% of Meridian's own book. (The 3 that pass
+    // won, but n=3 proves nothing.) Confidence on actually-traded pools spans 0.15-0.70,
+    // median 0.42; the 0.7-1.0 range is never traded at all, so it is entirely untested.
+    //
+    // Confidence DOES correlate with dry-run outcomes (rho 0.17-0.29 within strategy), but
+    // that is circular: confidence and the simulated P&L are both functions of the same entry
+    // metrics, and the pattern library that adjusts confidence is trained on those same dry
+    // runs. It buys nothing against reality.
+    //
+    // Root cause is missing feedback, not a bad formula: ~88% of decisions never link to an
+    // outcome, so almost nothing is available to calibrate against. Re-run this test before
+    // trusting confidence as a gate — n=102 rules out a moderate relationship but not a weak
+    // one (95% CI on rho is about [-0.11, +0.28]).
     enabled: false,
     webhookUrl: null,
     argusUrl: null,
