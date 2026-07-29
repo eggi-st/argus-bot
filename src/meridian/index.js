@@ -75,7 +75,44 @@ function getActiveRecommendations() {
   return rows.map(formatRecommendation)
 }
 
-function getPoolSignal(poolAddress) {
+/**
+ * Evaluate a pool Argus has never decided on, by fetching its metrics on demand.
+ *
+ * This is the fix for the gate's biggest blind spot. Meridian calls this endpoint only when it
+ * lacks its own cached candidate for the pool it is deploying (see evaluateArgusGate's
+ * `candidate ? evaluate : signal` fork), and until now the answer in that case was a flat
+ * "no recommendation" with NO confidence value at all. On the live VPS that was 112 of 141
+ * recorded gate decisions — 79% of the calibration set arriving empty.
+ *
+ * A single detail-endpoint lookup (~250ms measured) turns each of those into a real, recorded
+ * verdict. Fail-safe throughout: any error, timeout or unknown pool falls through to the old
+ * answer, so a deploy is never delayed or blocked by this path.
+ */
+async function evaluateOnDemand(poolAddress) {
+  const cfg = getConfig()
+  if (cfg.meridian?.signalOnDemandEval === false) return null
+  try {
+    const { fetchPoolDetail, condensePool, getVolatilityTf } = require('../intelligence/screener')
+    const tf  = getVolatilityTf(cfg.screening?.timeframe)
+    const raw = await fetchPoolDetail({ poolAddress, timeframe: tf })
+    if (!raw) return null
+    const c = condensePool(raw, tf)
+    const { evaluatePool } = require('../intelligence/index')
+    const verdict = evaluatePool({
+      pool: c.pool, token_mint: c.base?.mint, token_symbol: c.base?.symbol,
+      volatility: c.volatility, fee_active_tvl_ratio: c.fee_active_tvl_ratio,
+      tvl: c.tvl, mcap: c.mcap, holders: c.holders, token_age_hours: c.token_age_hours,
+      bin_step: c.bin_step, organic_score: c.organic_score,
+      price_change_pct: c.price_change_pct, volume_change_pct: c.volume_change_pct,
+    }, null)
+    return { ...verdict, source: 'on_demand' }
+  } catch (e) {
+    console.warn('[Meridian] on-demand evaluation failed:', e.message)
+    return null
+  }
+}
+
+async function getPoolSignal(poolAddress) {
   if (!poolAddress) return { recommended: false, reason: 'No pool address provided' }
 
   const active = db.prepare(`
@@ -107,6 +144,16 @@ function getPoolSignal(poolAddress) {
     WHERE pool_address = ?
     ORDER BY created_at DESC LIMIT 1
   `).get(poolAddress)
+
+  // Argus has an opinion on this pool but no LIVE recommendation. Evaluate it fresh rather
+  // than reporting stale history — Meridian is deploying now, and a verdict from a decision
+  // that already expired says nothing about current conditions.
+  const onDemand = await evaluateOnDemand(poolAddress)
+  if (onDemand) {
+    return historical
+      ? { ...onDemand, last_seen: historical.created_at }
+      : onDemand
+  }
 
   if (historical) {
     return {

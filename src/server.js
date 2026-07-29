@@ -588,10 +588,10 @@ app.get('/api/meridian/recommendations', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
-app.get('/api/meridian/pool/:address/signal', (req, res) => {
+app.get('/api/meridian/pool/:address/signal', async (req, res) => {
   try {
     const meridian = require('./meridian/index')
-    const signal = meridian.getPoolSignal(req.params.address)
+    const signal = await meridian.getPoolSignal(req.params.address)
     res.json(signal)
     recordGateQuery({
       endpoint:     'signal',

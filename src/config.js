@@ -150,6 +150,12 @@ const DEFAULTS = {
     // floor). Guarantees at least 1 dry-run sample per pipeline per scan, preventing the
     // gate from starving new dimensions of data they need to get promoted.
     explorationQuota: { enabled: true },
+    // Pools fetched per discovery call. NOT the coverage constraint today — probed 2026-07-29,
+    // the API holds 122,003 DLMM pools but only 11 clear the server-side filter set, so a page
+    // of 50 already returns everything eligible. Dropping the tightest filter (volume >= 5000)
+    // lifts it to 52; every other filter changes nothing on its own. Raising this alone fetches
+    // the same pools in a bigger envelope — pair it with a real filter loosening or leave it.
+    discoveryPageSize: 50,
     // Silent-outage guard for the intake, mirroring wallet.healthMaxFailedCycles. Raise a
     // one-shot P1 after this many CONSECUTIVE scans where every pipeline came back with no
     // pool universe at all (screening call threw, or the API reported 0 matching pools).
@@ -536,6 +542,16 @@ const DEFAULTS = {
     webhookUrl: null,
     argusUrl: null,
     smartWalletSync: false,
+    // When Meridian asks /pool/:address/signal about a pool Argus never decided on, fetch that
+    // pool's metrics on demand and evaluate it, instead of answering "no recommendation" with
+    // no confidence at all. That empty answer was 112 of 141 gate decisions on the live VPS —
+    // 79% of the calibration set arriving blank, which is the single largest reason Argus
+    // cannot yet prove whether its judgement is worth anything.
+    //
+    // Costs one detail-endpoint call (~250ms measured) and only on the fallback path: when
+    // Meridian HAS its own candidate it POSTs the metrics to /evaluate and this never runs.
+    // Fail-safe — any error falls through to the previous answer, so a deploy is never delayed.
+    signalOnDemandEval: true,
   },
   ai: {
     // LLM verdict generation via OpenAI-compatible endpoint.

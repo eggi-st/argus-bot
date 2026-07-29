@@ -537,7 +537,13 @@ async function discoverPools({ page_size = 50, screening, pipeline } = {}) {
  * Returns { candidates, total_screened, filtered_examples }
  */
 async function getTopCandidates({ limit = 10, screening, pipeline } = {}) {
-  const discovery = await discoverPools({ page_size: 50, screening, pipeline })
+  // page_size is configurable but is NOT currently the binding constraint on coverage. Probed
+  // 2026-07-29: the API holds 122,003 DLMM pools, yet only 11 pass the server-side filter set,
+  // so a page of 50 already returns everything that qualifies. Dropping the tightest single
+  // filter (volume >= 5000) lifts it to 52; every other filter changes nothing. Raise this only
+  // alongside a genuine filter loosening, or it fetches the same pools in a bigger envelope.
+  const pageSize = getConfig().scan?.discoveryPageSize ?? 50
+  const discovery = await discoverPools({ page_size: pageSize, screening, pipeline })
   const { pools, total, filtered_examples } = discovery
 
   // Deduplicate by base mint, sort by score, enrich only the top (limit + small buffer).
@@ -627,4 +633,4 @@ async function getTopCandidates({ limit = 10, screening, pipeline } = {}) {
   return { candidates, total_screened: total, filtered_examples: filtered_examples.slice(0, 5) }
 }
 
-module.exports = { discoverPools, getTopCandidates }
+module.exports = { discoverPools, getTopCandidates, fetchPoolDetail, condensePool, getVolatilityTf }
