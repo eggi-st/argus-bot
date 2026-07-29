@@ -223,6 +223,73 @@ function migrateSchema() {
     }
   }
 
+  // Backfill exit_technique on historical feedback_outcomes.
+  //
+  // The close_reason → technique mapper was added after ~400 real outcomes had already been
+  // ingested, and it was never applied retroactively. Those rows kept exit_technique = NULL.
+  // The gap was NOT random: threshold-triggered exits (net_target, il_stop) carried explicit
+  // technique tags from Meridian and mapped from day one, while condition-triggered exits
+  // (price_ran_up, whale_exit, low_yield, oor_timeout) only ever arrived as free text and all
+  // landed in the NULL bucket. So every exit-technique analysis ran on a ~37% sample biased
+  // toward exactly the two exits whose P&L sign is implied by their own trigger.
+  //
+  // Measured on the 2026-07-28 snapshot: 374 of 375 NULL rows recover, coverage 37% → 99.8%,
+  // and whale_exit goes from 1 visible row to 103. Idempotent — only touches NULL rows, and
+  // re-running maps nothing new.
+  try {
+    const { mapExitTechnique } = require('../learning/exit-mapper')
+    const orphans = db.prepare(
+      `SELECT id, close_reason FROM feedback_outcomes
+       WHERE exit_technique IS NULL AND close_reason IS NOT NULL`
+    ).all()
+    if (orphans.length) {
+      const upd = db.prepare(`UPDATE feedback_outcomes SET exit_technique = ? WHERE id = ?`)
+      let fixed = 0
+      db.transaction(rows => {
+        for (const row of rows) {
+          const tech = mapExitTechnique(row.close_reason)
+          if (tech) { upd.run(tech, row.id); fixed++ }
+        }
+      })(orphans)
+      if (fixed > 0) {
+        console.log(`[Schema] Backfilled exit_technique on ${fixed}/${orphans.length} historical outcome(s)`)
+      }
+    }
+  } catch (e) {
+    console.warn('[Schema] exit_technique backfill:', e.message)
+  }
+
+  // Relabel historical decisions whose volatility was MISSING but got bucketed as 'low'.
+  //
+  // conditionBucket() used `pool.volatility ?? 0`, so an absent reading fell into the low-vol
+  // bucket. Those rows assert a calm pool when the truth is "no data", and they are still being
+  // rolled into low_vol_* pattern cells by every reconcile. Only rows whose recorded indicator
+  // volatility is exactly 0 AND whose bucket starts with 'low_vol' are touched — a real
+  // measurement can never be exactly 0 now that the screener enforces a 1e-6 floor.
+  // Idempotent: after the first pass the bucket no longer starts with 'low_vol'.
+  try {
+    const suspects = db.prepare(
+      `SELECT id, condition_bucket, indicators_json FROM decisions
+       WHERE condition_bucket LIKE 'low\\_vol%' ESCAPE '\\' AND indicators_json IS NOT NULL`
+    ).all()
+    const upd = db.prepare(`UPDATE decisions SET condition_bucket = ? WHERE id = ?`)
+    let moved = 0
+    db.transaction(rows => {
+      for (const row of rows) {
+        let ind
+        try { ind = JSON.parse(row.indicators_json) } catch { continue }
+        if (Number(ind?.volatility) !== 0) continue
+        upd.run(row.condition_bucket.replace(/^low_vol/, 'unknown_vol'), row.id)
+        moved++
+      }
+    })(suspects)
+    if (moved > 0) {
+      console.log(`[Schema] Relabelled ${moved} decision(s) with missing volatility: low_vol → unknown_vol`)
+    }
+  } catch (e) {
+    console.warn('[Schema] volatility bucket relabel:', e.message)
+  }
+
   // screening_rejections table — records every pool filtered out during a scan
   try {
     db.exec(`

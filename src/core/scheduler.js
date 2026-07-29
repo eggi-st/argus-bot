@@ -97,6 +97,14 @@ function start() {
     bus.emitSafe('wallet_lifecycle_check', { ts: Date.now() })
   })
 
+  // ── DB retention: prune the unbounded diagnostic tables ───────────────────
+  const retCfg = require('../config').getConfig().retention || {}
+  if (retCfg.enabled !== false) {
+    schedule('retention-prune', retCfg.cron || '30 4 * * *', () => {
+      bus.emitSafe('retention_prune', { ts: Date.now() })
+    })
+  }
+
   console.log(`[Scheduler] ${jobs.size} jobs scheduled`)
 }
 

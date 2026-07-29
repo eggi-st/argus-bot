@@ -46,8 +46,17 @@ function reconcilePatterns() {
     GROUP BY d.condition_bucket, dr.strategy
   `).all()
 
-  // REAL rollup — actual Meridian executions (feedback_outcomes). Exclude spot_lo so the
-  // pure 'spot' learner stays clean (consistent with the Spot-LO routing decision).
+  // REAL rollup — actual Meridian executions (feedback_outcomes).
+  //
+  // spot_lo was originally excluded here to keep the pure 'spot' learner clean. That concern is
+  // already handled by the GROUP BY: rows roll up per (condition_bucket, strategy), so spot_lo
+  // lands in its own strategy cells and can never mix into spot. Excluding it from the IN list
+  // did not protect spot — it just meant spot_lo had no learner at all. As of 2026-07-28 that is
+  // 11 real outcomes with mean −1.08%, the WORST of any strategy in the corpus (spot −0.09,
+  // bid_ask −0.10), permanently invisible to pattern learning.
+  //
+  // It still will not promote until it clears minRealSamples, so nothing changes today — the
+  // point is that the samples now accumulate instead of being discarded.
   const realRows = db.prepare(`
     SELECT condition_bucket AS bucket, strategy AS strategy,
            COUNT(*) AS n,
@@ -57,7 +66,7 @@ function reconcilePatterns() {
            SUM(CASE WHEN pnl_pct > 0 THEN pnl_pct ELSE 0 END) AS win_pnl_sum,
            SUM(CASE WHEN pnl_pct <= 0 THEN pnl_pct ELSE 0 END) AS loss_pnl_sum
     FROM feedback_outcomes
-    WHERE condition_bucket IS NOT NULL AND strategy IN ('spot','bid_ask','limit_order')
+    WHERE condition_bucket IS NOT NULL AND strategy IN ('spot','bid_ask','limit_order','spot_lo')
     GROUP BY condition_bucket, strategy
   `).all()
 

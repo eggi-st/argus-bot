@@ -14,9 +14,25 @@ const { getConfig } = require('../config')
 // meteora        : on-chain, seeds from Argus decisions, zero API key
 // meteora-extended: on-chain, seeds from Pool Discovery API top pools
 // helius         : enhanced API (needs helius.apiKey), cleanest LP detection
-// solscan        : top token holders, no key, lowest signal precision
-// okx            : OKX smart money endpoint (needs okx.apiKey)
+// solscan        : top token holders — DISABLED by default (host retired), see config
+// okx            : OKX smart money endpoint (needs okx.apiKey) — DISABLED by default, see config
 const SOURCE_ORDER = ['meteora', 'meteora-extended', 'helius', 'solscan', 'okx']
+
+/**
+ * Sources switched off in config (wallet.discovery.disabledSources). A disabled source is
+ * never attempted, never gets a discovery_sources row, and cannot be revived by the Web UI
+ * resume button — config is the authority, so a click can't resurrect a dead integration.
+ * Returns a Set for O(1) membership.
+ */
+function disabledSources() {
+  const list = getConfig().wallet?.discovery?.disabledSources
+  return new Set(Array.isArray(list) ? list : [])
+}
+
+function activeSourceOrder() {
+  const off = disabledSources()
+  return SOURCE_ORDER.filter(s => !off.has(s))
+}
 
 const DEFAULT_COOLDOWN_MS = 6 * 3600 * 1000  // 6 hours
 const MAX_COOLDOWN_MS     = 24 * 3600 * 1000  // 24 hours
@@ -25,11 +41,17 @@ const AUTO_PAUSE_AFTER    = 5                  // consecutive failures
 // ── Source state helpers ──────────────────────────────────────────────────────
 
 function ensureSourceRows() {
-  for (const source of SOURCE_ORDER) {
+  for (const source of activeSourceOrder()) {
     db.prepare(`
       INSERT OR IGNORE INTO discovery_sources (source, cooldown_ms)
       VALUES (?, ?)
     `).run(source, DEFAULT_COOLDOWN_MS)
+  }
+  // Drop rows left behind by a source that has since been disabled, so the dashboard
+  // stops showing its stale failure_count / last_error forever. The row holds only
+  // scheduling state (cooldown, backoff) — no history is lost.
+  for (const source of disabledSources()) {
+    db.prepare('DELETE FROM discovery_sources WHERE source = ?').run(source)
   }
 }
 
@@ -170,7 +192,7 @@ async function runDiscovery() {
   console.log('[Hivemind] Discovery cycle started')
   let totalNew = 0
 
-  for (const sourceName of SOURCE_ORDER) {
+  for (const sourceName of activeSourceOrder()) {
     const check = canRunSource(sourceName)
     if (!check.ok) {
       console.log(`[Hivemind] ${sourceName}: ${check.reason} — skip`)
@@ -226,6 +248,10 @@ function pauseSource(source, durationMs = MAX_COOLDOWN_MS) {
 }
 
 function resumeSource(source) {
+  if (disabledSources().has(source)) {
+    console.log(`[Hivemind] ${source} is disabled in config (wallet.discovery.disabledSources) — resume ignored`)
+    return
+  }
   ensureSourceRows()
   db.prepare(`
     UPDATE discovery_sources
@@ -265,6 +291,15 @@ function getStatus() {
       paused_until:  row.paused_until,
     }
   })
+
+  // Surface config-disabled sources so the dashboard shows "off on purpose" rather than
+  // silently omitting an integration the operator may still expect to see.
+  for (const source of disabledSources()) {
+    if (SOURCE_ORDER.includes(source)) {
+      sources.push({ source, state: 'disabled', detail: 'off in config', last_run: null,
+                     failure_count: 0, last_error: null, paused_until: null })
+    }
+  }
 
   const walletCount = db.prepare('SELECT COUNT(*) as c FROM tracked_wallets WHERE active = 1').get()?.c || 0
 

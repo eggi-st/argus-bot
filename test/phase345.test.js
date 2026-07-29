@@ -73,8 +73,12 @@ ok('large-N weights EMA more than small-N (for ema>base)', () => {
   const large = adjustScore(0.5, { active: 1, sample_count: 200, ema_win_rate: 0.9 }, cfg, 'bid_ask')
   assert.ok(large > small, `large=${large} small=${small}`)
 })
-ok('getBaseRate falls back to 0.5 with no/low samples', () => {
-  assert.strictEqual(getBaseRate('spot', cfg), cfg.learning.baseRateFallback)
+ok('getBaseRate falls back to the configured prior with no/low samples', () => {
+  // Must name a strategy that genuinely has no rows. This previously asserted on 'spot',
+  // which only has <baseRateMinSamples closed dry-runs on a FRESH database — so the test
+  // passed on a clean checkout and failed on any real deployment, inverting exactly where
+  // a green suite matters most.
+  assert.strictEqual(getBaseRate('__no_such_strategy__', cfg), cfg.learning.baseRateFallback)
   assert.strictEqual(getBaseRate(null, cfg), cfg.learning.baseRateFallback)
 })
 

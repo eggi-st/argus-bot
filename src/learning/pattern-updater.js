@@ -14,7 +14,10 @@ const { getConfig } = require('../config')
  */
 function parseBucket(conditionBucket) {
   const parts = (conditionBucket || '').split('_')
-  const VALID_VOL    = new Set(['low', 'medium', 'high'])
+  // 'unknown' must be listed, otherwise conditionBucket's unknown-volatility marker falls
+  // through the whitelist and is coerced to 'medium' below — moving the contamination from
+  // the low bucket to the medium one instead of isolating it.
+  const VALID_VOL    = new Set(['low', 'medium', 'high', 'unknown'])
   const VALID_FEE    = new Set(['low', 'medium', 'high'])
   const VALID_REGIME = new Set(['recovery', 'neutral', 'decline', 'froth'])
   const VALID_AGE    = new Set(['new', 'established', 'veteran'])

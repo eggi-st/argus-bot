@@ -63,6 +63,21 @@ ok('good WR but negative mean P&L is blocked by meanPnl gate', () => {
   const g = checkPatternGate(pat, 0.8, {})
   assert.strictEqual(g.blocked, true, JSON.stringify(g))
 })
+ok('sim-backed pattern never gates — same distrust adjustScore applies to the boost', () => {
+  // Identical stats to the blocked case above, only source differs.
+  const real = { active: 1, win_rate: 0.7, sample_count: 40, mean_pnl_net: -3, source: 'real' }
+  const sim  = { active: 1, win_rate: 0.7, sample_count: 40, mean_pnl_net: -3, source: 'sim' }
+  assert.strictEqual(checkPatternGate(real, 0.8, {}).blocked, true, 'real must still block')
+  assert.strictEqual(checkPatternGate(sim,  0.8, {}).blocked, false, 'sim must not block')
+})
+ok('sim pattern is still subject to the confidence floor', () => {
+  const sim = { active: 1, win_rate: 0.7, sample_count: 40, mean_pnl_net: 2, source: 'sim' }
+  assert.strictEqual(checkPatternGate(sim, 0.1, {}).blocked, true)
+})
+ok('pattern with no source set still gates (legacy rows are not sim-exempt)', () => {
+  const pat = { active: 1, win_rate: 0.292, sample_count: 24, mean_pnl_net: -4.31 }
+  assert.strictEqual(checkPatternGate(pat, 0.8, {}).blocked, true)
+})
 
 console.log('Phase 2 — resolveScreening profiles:')
 const cfg = {

@@ -36,6 +36,7 @@ const SLOW_EVENTS = new Set([
   'wallet_lifecycle_check',  // Daily wallet state-machine + quality scoring cycle
   'wallet_observer_recovered', // Observer RPC responding again after a down period
   'regime_observatory',      // Rolling recompute of the regime-risk map (monitoring)
+  'retention_prune',         // Daily prune of the unbounded diagnostic tables
 ])
 
 const ALL_EVENTS = new Set([...FAST_EVENTS, ...SLOW_EVENTS])

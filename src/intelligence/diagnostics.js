@@ -98,7 +98,22 @@ function eligibilityGaps(windowStart, D) {
   return gaps
 }
 
-/** Screener-level reason saturation (which filters shape the universe). */
+/**
+ * Screener-level reason saturation (which filters shape the universe).
+ *
+ * Uses its own threshold, because the two streams have structurally different denominators.
+ * Eligibility saturation is measured PER STRATEGY, so one reason really can own 80–90% of it —
+ * the only gap this system ever opened was eligibility/no_ath_data at 91.7%. Screening
+ * saturation is measured against ALL rejections, which are permanently split across five or six
+ * competing reasons; the largest share ever observed is ~50% (volatility). At the shared 0.80
+ * the screening detector was not strict, it was UNREACHABLE.
+ *
+ * Simulated over 123 rolling 24h windows of real data (2026-06-27 → 07-28):
+ *   0.80 → 0 windows fire      0.50 → 8 (6.5%)     0.35 → 98 (80%)
+ *   0.60 → 0 windows fire      0.45 → 21 (17%)     0.30 → 120 (98%)
+ * 0.50 is the loosest value that still means something — one reason being an outright majority
+ * of everything rejected — while staying rare enough not to become background noise.
+ */
 function screeningGaps(windowStart, D) {
   const rows = db.prepare(
     `SELECT reason, scanned_at FROM screening_rejections WHERE scanned_at >= ?`
@@ -112,9 +127,10 @@ function screeningGaps(windowStart, D) {
     k.count++; k.scans.add(bucketOf(row.scanned_at))
   }
   const gaps = []
+  const threshold = D.screeningSaturationRatio ?? D.saturationRatio
   for (const [key, k] of Object.entries(byKey)) {
     const ratio = k.count / total
-    if (ratio >= D.saturationRatio && k.scans.size >= D.minScans) {
+    if (ratio >= threshold && k.scans.size >= D.minScans) {
       gaps.push({ stream: 'screening', strategy: null, reasonKey: key, ratio, denom: total, scans: k.scans.size, observation: k.count })
     }
   }

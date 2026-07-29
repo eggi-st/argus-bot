@@ -154,11 +154,17 @@ const DEFAULTS = {
   learning: {
     // Pattern confidence gate — blocks (strategy × condition) combos with no proven edge.
     // Only applies once a pattern is ACTIVE (promoted at promotionThreshold samples).
+    //
+    // NOTE on minConfidence: this gates on PATTERN statistics, which are measured. The
+    // confidence VALUE itself is a different matter — it does not predict real outcomes
+    // (Spearman 0.083, p=0.41, n=102). Raising minConfidence to filter on "high confidence"
+    // would be filtering on noise. See the warning in the `meridian` block below before
+    // treating the confidence number as a quality signal anywhere.
     confidenceGate: {
       enabled: true,
       minWinRate: 0.35,      // require Wilson lower-bound of win_rate >= this
       minMeanPnl: -1.0,      // block if avg net P&L below this (%)
-      minConfidence: 0.15,   // hard floor on blended confidence
+      minConfidence: 0.15,   // hard floor on blended confidence — a floor, NOT a quality bar
       wilsonZ: 1.0,          // 1.0 ≈ one std-error lower bound; raise to 1.96 for stricter 95%
       // Payoff ratio gate: avg_win_pnl / |avg_loss_pnl| must be >= this.
       // Blocks patterns where losses dwarf wins even if win_rate looks acceptable.
@@ -235,7 +241,15 @@ const DEFAULTS = {
       windowHours: 24,
       minDenominator: 30,     // need this many observations before judging
       minScans: 8,            // spread across this many distinct scans (anti false-positive)
-      saturationRatio: 0.80,  // reason must dominate this share to count as a gap
+      saturationRatio: 0.80,  // ELIGIBILITY stream: reason must dominate this share of a
+                              // per-strategy denominator (the one real gap hit 91.7%)
+      // SCREENING stream needs its own, lower bar. Its denominator is ALL rejections, split
+      // permanently across 5-6 competing reasons, so the largest share ever observed is ~50%
+      // (volatility). At 0.80 this detector was unreachable — 0 fires in 123 rolling 24h
+      // windows of real data. Simulated: 0.60 → 0 fires · 0.50 → 8 (6.5%) · 0.45 → 21 (17%)
+      // · 0.35 → 98 (80%, noise) · 0.30 → 120 (98%, useless). 0.50 = one reason is an outright
+      // majority of everything rejected, which is rare enough to be worth a look.
+      screeningSaturationRatio: 0.50,
       cron: '0 */6 * * *',
     },
     // Phase 4B — bounded auto-tuner. Ships OFF. Proposes damped, clamped deltas only when
@@ -321,6 +335,20 @@ const DEFAULTS = {
     graduateStreak:  3,             // consecutive passing recomputes before a cell is brake_ready
     brakeFactor:     0.5,            // advisory size multiplier for a brake_ready cell
   },
+  // DB retention. Only the pure-diagnostic tables are trimmed — the learning corpus
+  // (decisions, dry_run_positions, feedback_outcomes, wallet_actions) is never pruned
+  // because reconciliation and the regime observatory recompute over 90-day windows.
+  retention: {
+    enabled: true,
+    cron:    '30 4 * * *',   // daily, offset from the 06:00 wallet-lifecycle job
+    // screening_rejections is written ~2.8k rows/day (~900 KB/day) and read only over a
+    // 24h self-diagnosis window. 30 days leaves ample slack for dashboard drill-downs.
+    screeningRejectionsDays: 30,
+    // 'incremental' (default) reclaims pages only if the DB was created with
+    // auto_vacuum=INCREMENTAL; 'full' runs a real VACUUM (rewrites the whole file — slow,
+    // needs 2× disk free). Set 'full' once manually to shrink an already-bloated file.
+    vacuum: 'incremental',
+  },
   wallet: {
     // Set your Solana wallet address to enable observation — via WATCH_WALLET in .env
     // (preferred: keeps secrets out of user-config.json) or wallet.address in user-config.json.
@@ -342,6 +370,36 @@ const DEFAULTS = {
     // These wallets are observed as learning signals — their LP activity boosts
     // confidence when they enter the same pool Argus recommends.
     trackedWallets: [],
+    // Hivemind discovery chain control.
+    discovery: {
+      // Sources never attempted. A disabled source gets no discovery_sources row and cannot
+      // be revived from the Web UI — config wins over a resume click.
+      //
+      // Both entries below are off because they have no viable path to working without a paid
+      // key. Neither ever contributed a wallet; both sat late in the priority chain burning a
+      // retry every cycle. Removing them is purely subtractive — no discovery capability lost.
+      //
+      // 'okx' — needs okx.apiKey, which is not configured, so every daily retry failed
+      // ("OKX API key not configured", 17 straight failures on the VPS as of 2026-07-28). The
+      // rug/honeypot data it was meant to supply now comes from the no-auth Jupiter enrichment
+      // in screener.js.
+      // NOTE: this only disables OKX as a WALLET-DISCOVERY source. The separate OKX enrichment
+      // path in intelligence/screener.js (enrichWithOkx) is unaffected and still runs keyless.
+      //
+      // 'solscan' — the host it calls, api.solscan.io, no longer resolves at all (DNS
+      // NXDOMAIN, verified 2026-07-28); Solscan retired it. fetch() therefore rejects at the
+      // network layer, before any HTTP status check, and the catch in solscan-source.js only
+      // re-throws on 'rate limit'/'denied' — so all 5 tokens fall through to the generic
+      // "Solscan returned no usable holder data", which misleadingly implies the API answered.
+      // Successors need a paid key: pro-api.solscan.io/v2.0 → 401 "Token is missing";
+      // public-api.solscan.io → 404.
+      // BEFORE RE-ENABLING, solscan-source.js needs three fixes: (1) point at pro-api /v2.0 with
+      // an auth header, (2) its token query is `SELECT DISTINCT … LIMIT 5` with no ORDER BY, so
+      // DISTINCT's sort makes it always pick the 5 alphabetically-lowest mints — stale ones —
+      // never the newest, (3) `created_at > datetime('now','-7 days')` compares ISO-with-T/Z
+      // against SQLite's space-separated format; use julianday() on both sides.
+      disabledSources: ['okx', 'solscan'],
+    },
     // Lifecycle state machine for tracked smart-money wallets.
     // Transitions are driven by last_seen staleness (updated by hivemind re-discovery
     // OR by a real on-chain wallet_action detected by the observer).
@@ -359,6 +417,11 @@ const DEFAULTS = {
       // retiredDays, so the observer can recover automatically once discovery/RPC heals
       // instead of dying permanently after one upstream outage.
       minActiveFloor: 3,
+      // quality_score pairing window: a smart-money LP entry is credited with the FIRST
+      // Argus dry-run position opened on the same pool within this many days after it.
+      // 1 day matches the dry-run hold horizon (positions close in ~1–2h); widening it
+      // starts crediting wallets for outcomes their entry could not have predicted.
+      qualityWindowDays: 1,
     },
   },
   helius: {
@@ -375,6 +438,30 @@ const DEFAULTS = {
     // webhookUrl: Meridian's incoming webhook endpoint (set in Meridian user-config.json).
     // argusUrl: public URL of this Argus instance — used by Meridian to poll signals.
     // smartWalletSync: if true, Meridian can import Argus smart wallets automatically.
+    //
+    // ⚠️ DO NOT set Meridian's `argus.blockOnLowConfidence: true`. Argus's confidence is
+    // NOT calibrated against real outcomes, so gating on it would block trades on noise.
+    // Measured 2026-07-28 on every real outcome linked back to a decision (n=102, all spot —
+    // bid_ask and limit_order have ZERO linked real outcomes, so they are untestable):
+    //
+    //   Spearman confidence x pnl = 0.083 (p = 0.41, permutation)   → indistinguishable from 0
+    //   Spearman confidence x win = -0.022
+    //   win rate by confidence quartile: 68% / 64% / 70% / 64%      → no trend
+    //
+    // Meridian's default `argus.signalThreshold: 0.65` applied to those same 102 real trades
+    // passes 3 and rejects 99 — it would veto 97% of Meridian's own book. (The 3 that pass
+    // won, but n=3 proves nothing.) Confidence on actually-traded pools spans 0.15-0.70,
+    // median 0.42; the 0.7-1.0 range is never traded at all, so it is entirely untested.
+    //
+    // Confidence DOES correlate with dry-run outcomes (rho 0.17-0.29 within strategy), but
+    // that is circular: confidence and the simulated P&L are both functions of the same entry
+    // metrics, and the pattern library that adjusts confidence is trained on those same dry
+    // runs. It buys nothing against reality.
+    //
+    // Root cause is missing feedback, not a bad formula: ~88% of decisions never link to an
+    // outcome, so almost nothing is available to calibrate against. Re-run this test before
+    // trusting confidence as a gate — n=102 rules out a moderate relationship but not a weak
+    // one (95% CI on rho is about [-0.11, +0.28]).
     enabled: false,
     webhookUrl: null,
     argusUrl: null,
