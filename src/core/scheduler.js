@@ -91,6 +91,14 @@ function start() {
     })
   }
 
+  // ── Portfolio-risk observatory: outcome correlation × concurrent exposure ──
+  const pfCfg = require('../config').getConfig().portfolioRisk || {}
+  if (pfCfg.mode !== 'off') {
+    schedule('portfolio-observatory', pfCfg.cron || '0 */6 * * *', () => {
+      bus.emitSafe('portfolio_observatory', { ts: Date.now() })
+    })
+  }
+
   // ── Wallet lifecycle: state transitions + quality scoring ─────────────────
   const walletCfg = require('../config').getConfig().wallet || {}
   schedule('wallet-lifecycle', walletCfg.lifecycle?.cron || '0 6 * * *', () => {

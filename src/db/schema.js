@@ -484,6 +484,34 @@ function migrateSchema() {
     if (!e.message?.includes('already exists')) console.warn('[Schema] regime_risk:', e.message)
   }
 
+  // portfolio_risk — single-row snapshot of whether outcomes move together AND whether enough
+  // positions are held at once for that to cost anything. Both are required; either alone is
+  // harmless. Advisory only: advised_max_concurrent stays NULL until the gate has held for
+  // graduateStreak recomputes AND portfolioRisk.mode is switched to 'live'.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS portfolio_risk (
+        id                     INTEGER PRIMARY KEY CHECK (id = 1),
+        updated_at             TEXT,
+        window_days            INTEGER,
+        n_outcomes             INTEGER,
+        n_days                 INTEGER,
+        loss_rate              REAL,
+        overdispersion         REAL,
+        p_value                REAL,
+        peak_concurrency       INTEGER,
+        pct_time_concurrent    REAL,
+        gate_pass              INTEGER DEFAULT 0,
+        stable_streak          INTEGER DEFAULT 0,
+        maturity               TEXT    DEFAULT 'immature',
+        advised_max_concurrent INTEGER,
+        blocking_reason        TEXT
+      );
+    `)
+  } catch (e) {
+    if (!e.message?.includes('already exists')) console.warn('[Schema] portfolio_risk:', e.message)
+  }
+
   try {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_wallet_type ON wallet_actions(wallet_type, detected_at)`)
   } catch (e) {

@@ -39,6 +39,7 @@ const SLOW_EVENTS = new Set([
   'regime_observatory',      // Rolling recompute of the regime-risk map (monitoring)
   'retention_prune',         // Daily prune of the unbounded diagnostic tables
   'screener_recovered',      // Screener producing a universe again after a down period
+  'portfolio_observatory',   // Rolling recompute of outcome correlation + concurrent exposure
 ])
 
 const ALL_EVENTS = new Set([...FAST_EVENTS, ...SLOW_EVENTS])

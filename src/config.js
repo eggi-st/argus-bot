@@ -383,6 +383,38 @@ const DEFAULTS = {
     // needs 2× disk free). Set 'full' once manually to shrink an already-bloated file.
     vacuum: 'incremental',
   },
+  // Portfolio-risk OBSERVATORY. Tracks whether outcomes move together AND whether enough
+  // positions are open at once for that to matter. Both are required — perfectly correlated
+  // outcomes across a one-position portfolio are just outcomes.
+  //
+  // Measured 2026-07-29 on 594 real outcomes, NEITHER holds yet:
+  //   overdispersion 1.64x independent, p = 0.099 (permutation) → suggestive, not significant
+  //   peak concurrency 4 ever; >=3 open only 0.5% of the time; median 1
+  // So this ships as pure monitoring, exactly like regimeRisk. Do not switch mode to 'live'
+  // until the gate has actually graduated.
+  //
+  // Event time comes from outcome_id (`pool:deployed_at`), never created_at — a bulk backfill
+  // on 2026-06-26 landed 428 historical outcomes in one hour, which alone inflated measured
+  // overdispersion from 1.6x to 5.2x and invented a phantom 428-position concurrency peak.
+  portfolioRisk: {
+    mode:       'observatory',  // observatory (advisory-only) | live | off
+    cron:       '0 */6 * * *',
+    windowDays: 90,
+    // Gate — every condition must hold, then hold again for graduateStreak recomputes.
+    minOutcomes:          200,   // below this the per-day loss rate is mostly noise
+    minDays:              30,
+    alpha:                0.05,  // permutation p-value threshold for real clustering
+    minPeakConcurrency:   3,     // never seen above 4; if this never trips, portfolio risk is moot
+    minPctTimeConcurrent: 5,     // and it has to be sustained, not a single spike (currently 0.5%)
+    graduateStreak:       3,
+    // Analysis knobs.
+    minOutcomesPerDay: 4,        // days thinner than this are dropped from the variance estimate
+    permutations:      5000,
+    concurrencyLevel:  3,        // "concurrent" means at least this many open at once
+    seed:              20260729, // fixed so an unchanged window yields an identical p-value —
+                                 // a maturity streak must not advance on shuffle luck
+    advisedMaxConcurrent: 2,     // only ever emitted once mature AND mode === 'live'
+  },
   wallet: {
     // Set your Solana wallet address to enable observation — via WATCH_WALLET in .env
     // (preferred: keeps secrets out of user-config.json) or wallet.address in user-config.json.

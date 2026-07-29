@@ -116,4 +116,69 @@ ok('getBaseRate falls back to the configured prior with no/low samples', () => {
   assert.strictEqual(getBaseRate(null, cfg), cfg.learning.baseRateFallback)
 })
 
+console.log('\nPortfolio observatory — correlation statistics:')
+const { overdispersionRatio, permutationPValue, concurrencyProfile } =
+  require('../src/learning/portfolio-observatory')
+
+ok('independent-looking data sits near ratio 1', () => {
+  // 20 days x 10 outcomes, losses spread evenly — one loss per position, alternating.
+  const sizes = Array(20).fill(10)
+  const labels = Array(200).fill(0).map((_, i) => i % 10 < 4 ? 1 : 0)  // 40% loss, same every day
+  const r = overdispersionRatio(sizes, labels)
+  assert.ok(r < 0.5, `evenly-spread losses must be UNDER-dispersed, got ${r}`)
+})
+ok('perfectly clustered losses blow the ratio far above 1', () => {
+  // Same 40% loss rate, but whole days are all-loss or all-win.
+  const sizes = Array(20).fill(10)
+  const labels = []
+  for (let d = 0; d < 20; d++) for (let i = 0; i < 10; i++) labels.push(d < 8 ? 1 : 0)
+  const r = overdispersionRatio(sizes, labels)
+  assert.ok(r > 5, `day-level clustering must be strongly over-dispersed, got ${r}`)
+})
+ok('degenerate inputs return null instead of NaN or Infinity', () => {
+  assert.strictEqual(overdispersionRatio([], []), null)
+  assert.strictEqual(overdispersionRatio([5], [0, 0, 0, 0, 0]), null)   // <2 days
+  assert.strictEqual(overdispersionRatio([2, 2], [0, 0, 0, 0]), null)   // loss rate 0
+  assert.strictEqual(overdispersionRatio([2, 2], [1, 1, 1, 1]), null)   // loss rate 1
+})
+ok('permutation p-value is deterministic for a fixed seed', () => {
+  const sizes = Array(10).fill(6)
+  const labels = Array(60).fill(0).map((_, i) => (i * 7) % 3 === 0 ? 1 : 0)
+  const a = permutationPValue(sizes, labels, 200, 42)
+  const b = permutationPValue(sizes, labels, 200, 42)
+  assert.strictEqual(a.pValue, b.pValue, 'same seed must give the same p — a maturity streak must not advance on shuffle luck')
+  assert.ok(a.pValue > 0 && a.pValue <= 1, `p out of range: ${a.pValue}`)
+})
+ok('clustered data yields a small p, spread data does not', () => {
+  const sizes = Array(20).fill(10)
+  const clustered = []
+  for (let d = 0; d < 20; d++) for (let i = 0; i < 10; i++) clustered.push(d < 8 ? 1 : 0)
+  const spread = Array(200).fill(0).map((_, i) => i % 10 < 4 ? 1 : 0)
+  assert.ok(permutationPValue(sizes, clustered, 500, 7).pValue < 0.01, 'clustered must be significant')
+  assert.ok(permutationPValue(sizes, spread,    500, 7).pValue > 0.10, 'evenly-spread must not be')
+})
+ok('concurrency counts overlapping intervals, not same-day closes', () => {
+  // Three positions on the same day, each closing before the next opens → peak 1, not 3.
+  const seq = [
+    { deployed_at: '2026-07-09T00:00:00.000Z', minutes_held: 30 },
+    { deployed_at: '2026-07-09T01:00:00.000Z', minutes_held: 30 },
+    { deployed_at: '2026-07-09T02:00:00.000Z', minutes_held: 30 },
+  ]
+  assert.strictEqual(concurrencyProfile(seq, 2).peak, 1)
+  // Same three, now genuinely overlapping → peak 3.
+  const overlap = [
+    { deployed_at: '2026-07-09T00:00:00.000Z', minutes_held: 180 },
+    { deployed_at: '2026-07-09T00:30:00.000Z', minutes_held: 180 },
+    { deployed_at: '2026-07-09T01:00:00.000Z', minutes_held: 180 },
+  ]
+  assert.strictEqual(concurrencyProfile(overlap, 2).peak, 3)
+})
+ok('concurrency ignores unparseable deploy times rather than counting them as epoch 0', () => {
+  const rows = [
+    { deployed_at: 'not-a-date', minutes_held: 60 },
+    { deployed_at: '2026-07-09T00:00:00.000Z', minutes_held: 60 },
+  ]
+  assert.strictEqual(concurrencyProfile(rows, 2).peak, 1)
+})
+
 console.log(`\n${passed} assertion(s) passed.`)

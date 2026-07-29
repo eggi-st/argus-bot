@@ -65,6 +65,7 @@ async function init() {
   require('../learning/reconcile').init()
   require('../learning/exit-stats').init()
   require('../learning/regime-observatory').init()
+  require('../learning/portfolio-observatory').init()
   require('../intelligence/diagnostics').init()
   require('../ai/system-report').init()
   require('../learning/auto-tuner').init()

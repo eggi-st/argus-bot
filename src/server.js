@@ -763,6 +763,31 @@ app.get('/api/screening-rejections', (req, res) => {
 // Regime-risk observatory. Full map, or one cell's advisory via ?vol=&regime= (for Meridian to
 // query before a deploy). In mode 'observatory' size_factor is advisory (always 1.0); only mode
 // 'live' returns a real down-size for graduated cells. Fail-safe: unknown/immature cell → 1.0.
+// Portfolio risk — outcome correlation × concurrent exposure. Advisory only:
+// advised_max_concurrent is null unless the gate graduated AND mode is 'live'. Meridian can
+// poll this, but must treat a null as "no opinion", never as "no limit".
+app.get('/api/portfolio-risk', (req, res) => {
+  try {
+    const mode = require('./config').getConfig().portfolioRisk?.mode || 'observatory'
+    const row = db.prepare(`SELECT * FROM portfolio_risk WHERE id = 1`).get()
+    if (!row) return res.json({ mode, verdict: 'not_computed', advised_max_concurrent: null })
+    res.json({
+      mode,
+      verdict:                row.maturity,
+      advised_max_concurrent: row.advised_max_concurrent,
+      blocking_reason:        row.blocking_reason,
+      overdispersion:         row.overdispersion,
+      p_value:                row.p_value,
+      peak_concurrency:       row.peak_concurrency,
+      pct_time_concurrent:    row.pct_time_concurrent,
+      n_outcomes:             row.n_outcomes,
+      n_days:                 row.n_days,
+      stable_streak:          row.stable_streak,
+      updated_at:             row.updated_at,
+    })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 app.get('/api/regime-risk', (req, res) => {
   try {
     const { getRegimeRisk, getRegimeRiskCell } = require('./db/schema')
