@@ -241,7 +241,15 @@ const DEFAULTS = {
       windowHours: 24,
       minDenominator: 30,     // need this many observations before judging
       minScans: 8,            // spread across this many distinct scans (anti false-positive)
-      saturationRatio: 0.80,  // reason must dominate this share to count as a gap
+      saturationRatio: 0.80,  // ELIGIBILITY stream: reason must dominate this share of a
+                              // per-strategy denominator (the one real gap hit 91.7%)
+      // SCREENING stream needs its own, lower bar. Its denominator is ALL rejections, split
+      // permanently across 5-6 competing reasons, so the largest share ever observed is ~50%
+      // (volatility). At 0.80 this detector was unreachable — 0 fires in 123 rolling 24h
+      // windows of real data. Simulated: 0.60 → 0 fires · 0.50 → 8 (6.5%) · 0.45 → 21 (17%)
+      // · 0.35 → 98 (80%, noise) · 0.30 → 120 (98%, useless). 0.50 = one reason is an outright
+      // majority of everything rejected, which is rare enough to be worth a look.
+      screeningSaturationRatio: 0.50,
       cron: '0 */6 * * *',
     },
     // Phase 4B — bounded auto-tuner. Ships OFF. Proposes damped, clamped deltas only when

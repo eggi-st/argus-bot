@@ -99,15 +99,28 @@ function checkPatternGate(pattern, confidence, gateCfg = {}) {
  * Format: "<volBucket>_vol_<feeBucket>_yield_<regime>_<ageBucket>"
  * Age thresholds: new (<48h), established (48h–168h), veteran (>168h).
  * Null token_age_hours (data unavailable) is treated as 'new'.
+ *
+ * MISSING volatility gets its own 'unknown' bucket rather than collapsing to 'low'.
+ * `vol ?? 0` used to make "we have no volatility reading" indistinguishable from "this pool
+ * is calm" — the single most optimistic reading available, since low vol is what spot routing
+ * rewards. Measured on the 2026-07-28 snapshot: 33 decisions carried volatility 0 and ALL 33
+ * landed in low_vol_* buckets, with mean dry-run P&L +0.27% against a corpus mean of −0.03%.
+ * They were inflating the apparent quality of the low-vol cells, and those cells are small
+ * (regime_risk low×neutral is n=19), so 33 mislabelled samples is not a rounding error.
+ *
+ * 'unknown' cells find no pattern row, so adjustScore leaves the score untouched and
+ * checkPatternGate does not block — an unknown condition is explored, not judged.
  */
 function conditionBucket(pool) {
-  const vol      = pool.volatility ?? 0
+  const rawVol   = Number(pool.volatility)
+  const volKnown = Number.isFinite(rawVol) && rawVol > 0
+  const vol      = volKnown ? rawVol : 0
   const feeTvl   = pool.fee_active_tvl_ratio ?? 0
   const pricePct = pool.price_change_pct ?? 0
   const volPct   = pool.volume_change_pct ?? 0
   const ageHours = pool.token_age_hours ?? 0
 
-  const volBucket = vol > 2 ? 'high' : vol > 1 ? 'medium' : 'low'
+  const volBucket = !volKnown ? 'unknown' : vol > 2 ? 'high' : vol > 1 ? 'medium' : 'low'
   const feeBucket = feeTvl > 0.3 ? 'high' : feeTvl > 0.1 ? 'medium' : 'low'
   const regime    = pricePct > 5 && volPct > 30 ? 'recovery'
     : pricePct < -5 ? 'decline'
