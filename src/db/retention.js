@@ -29,6 +29,18 @@ function pruneOldRows() {
   const cutoff = new Date(Date.now() - keepDays * 86_400_000).toISOString()
   const res = db.prepare(`DELETE FROM screening_rejections WHERE scanned_at < ?`).run(cutoff)
 
+  // gate_queries is written on every question Meridian asks, so it grows with poll frequency
+  // rather than with anything meaningful. Kept longer than the rejections because a linked row
+  // IS learning data — and rows that never got an outcome attached are dropped first.
+  const gateDays = rCfg.gateQueriesDays ?? 180
+  if (gateDays > 0) {
+    const gateCutoff = new Date(Date.now() - gateDays * 86_400_000).toISOString()
+    const g = db.prepare(
+      `DELETE FROM gate_queries WHERE created_at < ? AND outcome_id IS NULL`
+    ).run(gateCutoff)
+    if (g.changes > 0) console.log(`[Retention] Pruned ${g.changes} unlinked gate_queries row(s) older than ${gateDays}d`)
+  }
+
   if (res.changes > 0) {
     console.log(`[Retention] Pruned ${res.changes} screening_rejections row(s) older than ${keepDays}d`)
     // Reclaim the freed pages instead of leaving the file at its high-water mark.

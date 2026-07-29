@@ -87,7 +87,7 @@ app.get('/diagnostics', (req, res) => {
 
 const { version } = require('../package.json')
 const db = require('./db/database')
-const { recordFeedbackOutcome } = require('./db/schema')
+const { recordFeedbackOutcome, recordGateQuery, linkGateQueryOutcome } = require('./db/schema')
 const { techniqueAuthor, SCREENS } = require('./intelligence/techniques')
 const { getConfig } = require('./config')
 
@@ -186,6 +186,19 @@ app.post('/api/feedback', (req, res) => {
           linked_decision_id: decisionId ?? null, features_json: featuresJson,
         })
       } catch (e) { console.warn('[Argus] feedback_outcome insert:', e.message) }
+
+      // Close the loop on the LIVE channel: attach this outcome to the gate question that
+      // preceded it on the same pool. Anchored on the position's deploy time, taken from
+      // outcome_id (`pool:deployed_at`) — a bulk backfill arrives long after the trade, and
+      // anchoring on arrival would bind it to whatever was asked most recently instead.
+      try {
+        const deployedAt = typeof outcome_id === 'string' && outcome_id.includes(':')
+          ? outcome_id.slice(outcome_id.indexOf(':') + 1)
+          : null
+        if (deployedAt && pool_address) {
+          linkGateQueryOutcome({ pool_address, outcome_id, pnl_pct, deployed_at: deployedAt })
+        }
+      } catch (e) { console.warn('[Argus] gate-query link:', e.message) }
     }
 
     // Compute Argus-native condition_bucket from raw metrics
@@ -578,7 +591,17 @@ app.get('/api/meridian/recommendations', (req, res) => {
 app.get('/api/meridian/pool/:address/signal', (req, res) => {
   try {
     const meridian = require('./meridian/index')
-    res.json(meridian.getPoolSignal(req.params.address))
+    const signal = meridian.getPoolSignal(req.params.address)
+    res.json(signal)
+    recordGateQuery({
+      endpoint:     'signal',
+      pool_address: req.params.address,
+      token_symbol: signal?.token_symbol ?? null,
+      strategy:     signal?.strategy ?? null,
+      recommended:  signal?.recommended ? 1 : 0,
+      confidence:   signal?.confidence ?? null,
+      reason:       signal?.reason ?? null,
+    })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
@@ -592,7 +615,23 @@ app.post('/api/meridian/evaluate', (req, res) => {
   try {
     const { strategy, ...metrics } = req.body || {}
     const ic = require('./intelligence/index')
-    res.json(ic.evaluatePool(metrics, strategy || null))
+    const verdict = ic.evaluatePool(metrics, strategy || null)
+    // Answer first, record second — the log must never delay or break Meridian's reply.
+    res.json(verdict)
+    recordGateQuery({
+      endpoint:         'evaluate',
+      pool_address:     metrics?.pool || metrics?.pool_address || null,
+      token_symbol:     verdict?.token_symbol || metrics?.base?.symbol || null,
+      strategy:         verdict?.strategy || strategy || null,
+      recommended:      verdict?.recommended ? 1 : 0,
+      blocked:          verdict?.reason && verdict.reason !== 'eligible' ? 1 : 0,
+      confidence:       verdict?.confidence ?? null,
+      raw_score:        verdict?.trace?.find(s => s.step === 'base_score')?.value ?? null,
+      condition_bucket: verdict?.condition_bucket ?? null,
+      pattern_source:   verdict?.pattern?.source ?? null,
+      pattern_active:   verdict?.pattern?.active ? 1 : 0,
+      reason:           verdict?.reason ?? null,
+    })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
@@ -763,6 +802,46 @@ app.get('/api/screening-rejections', (req, res) => {
 // Regime-risk observatory. Full map, or one cell's advisory via ?vol=&regime= (for Meridian to
 // query before a deploy). In mode 'observatory' size_factor is advisory (always 1.0); only mode
 // 'live' returns a real down-size for graduated cells. Fail-safe: unknown/immature cell → 1.0.
+// Gate consumption — how often Meridian actually asks, what Argus answered, and how many of
+// those answers ever got an outcome attached. This is the instrument for deciding whether the
+// recommendation stream is worth keeping: `decisions.followed` measures coincidence, this
+// measures the live channel.
+app.get('/api/gate-queries', (req, res) => {
+  try {
+    const days = Math.min(parseInt(req.query.days || '30', 10), 365)
+    const since = new Date(Date.now() - days * 86_400_000).toISOString()
+    const overall = db.prepare(`
+      SELECT COUNT(*) AS queries,
+             SUM(CASE WHEN recommended = 1 THEN 1 ELSE 0 END) AS recommended,
+             SUM(CASE WHEN outcome_id IS NOT NULL THEN 1 ELSE 0 END) AS linked,
+             COUNT(DISTINCT pool_address) AS pools
+      FROM gate_queries WHERE created_at >= ?
+    `).get(since)
+    const byStrategy = db.prepare(`
+      SELECT COALESCE(strategy, '(none)') AS strategy,
+             COUNT(*) AS queries,
+             SUM(CASE WHEN recommended = 1 THEN 1 ELSE 0 END) AS recommended,
+             SUM(CASE WHEN outcome_id IS NOT NULL THEN 1 ELSE 0 END) AS linked,
+             ROUND(AVG(CASE WHEN outcome_pnl_pct IS NOT NULL THEN outcome_pnl_pct END), 3) AS mean_pnl,
+             ROUND(100.0 * SUM(CASE WHEN outcome_pnl_pct > 0 THEN 1 ELSE 0 END)
+                   / NULLIF(SUM(CASE WHEN outcome_pnl_pct IS NOT NULL THEN 1 ELSE 0 END), 0), 1) AS win_pct
+      FROM gate_queries WHERE created_at >= ?
+      GROUP BY strategy ORDER BY queries DESC
+    `).all(since)
+    // The payoff: did saying "recommended" actually separate the winners?
+    const separation = db.prepare(`
+      SELECT recommended,
+             COUNT(*) AS n,
+             ROUND(AVG(outcome_pnl_pct), 3) AS mean_pnl,
+             ROUND(100.0 * SUM(CASE WHEN outcome_pnl_pct > 0 THEN 1 ELSE 0 END) / COUNT(*), 1) AS win_pct
+      FROM gate_queries
+      WHERE created_at >= ? AND outcome_pnl_pct IS NOT NULL
+      GROUP BY recommended
+    `).all(since)
+    res.json({ window_days: days, overall, by_strategy: byStrategy, verdict_separation: separation })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // Portfolio risk — outcome correlation × concurrent exposure. Advisory only:
 // advised_max_concurrent is null unless the gate graduated AND mode is 'live'. Meridian can
 // poll this, but must treat a null as "no opinion", never as "no limit".

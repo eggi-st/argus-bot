@@ -484,6 +484,47 @@ function migrateSchema() {
     if (!e.message?.includes('already exists')) console.warn('[Schema] regime_risk:', e.message)
   }
 
+  // gate_queries — every question Meridian asks the gate, and the answer Argus gave.
+  //
+  // /api/meridian/evaluate and /pool/:address/signal are the ONLY live integration: Meridian
+  // picks its own pools and asks Argus to comment. Both were fire-and-forget — Argus computed a
+  // verdict, returned it, and kept no record. So the one channel that is actually connected was
+  // also the one Argus could never learn from.
+  //
+  // Recording the query lets the outcome be linked back when Meridian later reports it, which
+  // is the first honest calibration set: "when I said X about this pool, what happened?" It also
+  // covers all three strategies, unlike decisions.followed — that flag is set by the wallet
+  // observer noticing Meridian entered a pool that happened to have an active recommendation,
+  // which is coincidence rather than consumption (61 of 4327, and 0 for limit_order).
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS gate_queries (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at        TEXT    NOT NULL,
+        endpoint          TEXT,               -- 'evaluate' | 'signal'
+        pool_address      TEXT,
+        token_symbol      TEXT,
+        strategy          TEXT,
+        recommended       INTEGER,            -- Argus's verdict as returned
+        blocked           INTEGER DEFAULT 0,
+        confidence        REAL,
+        raw_score         REAL,
+        condition_bucket  TEXT,
+        pattern_source    TEXT,
+        pattern_active    INTEGER,
+        reason            TEXT,
+        -- filled in later, when Meridian reports what actually happened on this pool
+        outcome_id        TEXT,
+        outcome_pnl_pct   REAL,
+        outcome_linked_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_gate_pool ON gate_queries(pool_address);
+      CREATE INDEX IF NOT EXISTS idx_gate_created ON gate_queries(created_at);
+    `)
+  } catch (e) {
+    if (!e.message?.includes('already exists')) console.warn('[Schema] gate_queries:', e.message)
+  }
+
   // portfolio_risk — single-row snapshot of whether outcomes move together AND whether enough
   // positions are held at once for that to cost anything. Both are required; either alone is
   // harmless. Advisory only: advised_max_concurrent stays NULL until the gate has held for
@@ -745,6 +786,64 @@ function closeDryRunPosition(id, data) {
 
 // Phase 5: insert a live Meridian outcome. INSERT OR IGNORE on outcome_id dedups
 // double-pushes (same close relayed from multiple Meridian paths). Returns true if inserted.
+/** Record one gate question and the answer Argus gave. Never throws — a logging failure must
+ *  not break the answer Meridian is waiting on. */
+function recordGateQuery(data) {
+  try {
+    return getStmt('insertGateQuery', `
+      INSERT INTO gate_queries
+        (created_at, endpoint, pool_address, token_symbol, strategy, recommended, blocked,
+         confidence, raw_score, condition_bucket, pattern_source, pattern_active, reason)
+      VALUES
+        (@created_at, @endpoint, @pool_address, @token_symbol, @strategy, @recommended, @blocked,
+         @confidence, @raw_score, @condition_bucket, @pattern_source, @pattern_active, @reason)
+    `).run({
+      created_at: new Date().toISOString(),
+      endpoint: null, pool_address: null, token_symbol: null, strategy: null,
+      recommended: null, blocked: 0, confidence: null, raw_score: null,
+      condition_bucket: null, pattern_source: null, pattern_active: null, reason: null,
+      ...data,
+    })
+  } catch (e) {
+    console.warn('[Schema] recordGateQuery:', e.message)
+    return null
+  }
+}
+
+/**
+ * Attach a reported outcome to the gate question that preceded it on the same pool.
+ *
+ * Matches the most recent UNLINKED query for that pool at or before the position was deployed,
+ * within lookbackHours. Deploy time — not the ingest time — is the anchor, for the same reason
+ * the portfolio observatory uses it: outcomes can arrive in bulk long after the fact, and
+ * anchoring on arrival would attach them to whatever question happened to be asked most
+ * recently. Returns the linked row id, or null when nothing matched.
+ */
+function linkGateQueryOutcome({ pool_address, outcome_id, pnl_pct, deployed_at, lookbackHours = 24 }) {
+  if (!pool_address || !deployed_at) return null
+  try {
+    const upper = new Date(deployed_at).toISOString()
+    const lower = new Date(Date.parse(deployed_at) - lookbackHours * 3_600_000).toISOString()
+    if (!Number.isFinite(Date.parse(upper))) return null
+    const row = db.prepare(`
+      SELECT id FROM gate_queries
+      WHERE pool_address = ? AND outcome_id IS NULL
+        AND created_at <= ? AND created_at >= ?
+      ORDER BY created_at DESC LIMIT 1
+    `).get(pool_address, upper, lower)
+    if (!row) return null
+    db.prepare(`
+      UPDATE gate_queries
+      SET outcome_id = ?, outcome_pnl_pct = ?, outcome_linked_at = ?
+      WHERE id = ?
+    `).run(outcome_id ?? null, pnl_pct ?? null, new Date().toISOString(), row.id)
+    return row.id
+  } catch (e) {
+    console.warn('[Schema] linkGateQueryOutcome:', e.message)
+    return null
+  }
+}
+
 function recordFeedbackOutcome(data) {
   const r = getStmt('insertFeedbackOutcome', `
     INSERT OR IGNORE INTO feedback_outcomes
@@ -938,4 +1037,5 @@ module.exports = {
   recordSystemReport, recordTuningEvent, getTuningEvents,
   recordTokenPrice, getTokenAth,
   upsertRegimeRisk, getRegimeRisk, getRegimeRiskCell,
+  recordGateQuery, linkGateQueryOutcome,
 }

@@ -378,6 +378,10 @@ const DEFAULTS = {
     // screening_rejections is written ~2.8k rows/day (~900 KB/day) and read only over a
     // 24h self-diagnosis window. 30 days leaves ample slack for dashboard drill-downs.
     screeningRejectionsDays: 30,
+    // gate_queries grows with how often Meridian polls, not with anything meaningful. Kept far
+    // longer because a row with an outcome attached IS calibration data — only rows that never
+    // got one are pruned.
+    gateQueriesDays: 180,
     // 'incremental' (default) reclaims pages only if the DB was created with
     // auto_vacuum=INCREMENTAL; 'full' runs a real VACUUM (rewrites the whole file — slow,
     // needs 2× disk free). Set 'full' once manually to shrink an already-bloated file.
