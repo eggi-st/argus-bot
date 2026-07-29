@@ -32,7 +32,18 @@ function getVolatilityTf(sourceTf) {
   return srcMin != null && srcMin >= minMin ? sourceTf : MIN_VOL_TF
 }
 
-function isUsableVolatility(v) { const n = Number(v); return Number.isFinite(n) && n > 0 }
+// Minimum volatility that counts as a real measurement. The discovery API sometimes returns a
+// denormal instead of a clean 0 for a pool it has no data for — a live probe on 2026-07-28
+// returned 1.65e-8. A bare `> 0` test accepts that, and the consequences run the wrong way: the
+// pool reads as ULTRA-calm, sails through maxVolatility, and scores well for spot (which wants
+// vol < 2). Treating it as missing data is the honest reading. Real measurements in the corpus
+// are ~0.2–4; nothing legitimate has ever landed between 0 and 1e-3 across 4327 decisions, so
+// this floor excludes garbage only.
+const MIN_USABLE_VOLATILITY = 1e-6
+function isUsableVolatility(v) {
+  const n = Number(v)
+  return Number.isFinite(n) && n >= MIN_USABLE_VOLATILITY
+}
 
 function isTokenBlacklisted(mint) {
   if (!mint) return false
@@ -92,9 +103,10 @@ async function refetchVolatility(rawPools, addrs, targetTf) {
   for (const p of rawPools) {
     if (p?.pool_address && byPool.has(p.pool_address)) {
       const v = byPool.get(p.pool_address)
-      // Never clobber a usable volatility with a non-positive refetch (the detail endpoint
-      // can also return 0). Only adopt a strictly-positive value.
-      if (!(v > 0)) continue
+      // Never clobber a usable volatility with an unusable refetch (the detail endpoint can
+      // also return 0, or a denormal like 1.65e-8). Same predicate the screener uses, so a
+      // value we adopt here is one the screener would accept as a real measurement.
+      if (!isUsableVolatility(v)) continue
       if (!(num(p.volatility) > 0)) recovered++
       p.volatility = v
       p.volatility_timeframe = targetTf
