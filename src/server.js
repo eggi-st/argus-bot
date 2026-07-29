@@ -92,27 +92,8 @@ const { techniqueAuthor, SCREENS } = require('./intelligence/techniques')
 const { getConfig } = require('./config')
 
 // Map a Meridian close_reason to an Argus exit technique id (for live attribution).
-// Order matters — most-authoritative/specific first. A stop that ALSO mentions "out of range"
-// is still a stop, so stop is tested before oor. Covers Meridian's real close-reason
-// vocabulary; previously 68% of real outcomes fell through to null and fragmented the
-// exit-technique learning across raw high-cardinality strings.
-function mapExitTechnique(closeReason) {
-  if (!closeReason) return null
-  const r = String(closeReason).toLowerCase()
-  if (r.includes('supertrend'))                                  return 'supertrend_break'
-  if (r.includes('stop') || /\bsl\b/.test(r) || r.includes('emergency')) return 'il_stop'
-  if (r.includes('trail'))                                       return 'trailing'
-  if (r.includes('take') || r.includes('profit') || /\btp\b/.test(r) || r.includes('net target')) return 'net_target'
-  if (r.includes('whale'))                                       return 'whale_exit'
-  if (r.includes('low yield') || r.includes('fee/tvl'))          return 'low_yield'
-  if (r.includes('rsi'))                                         return 'rsi_reversal'
-  if (r.includes('pumped') || r.includes('ran up') || r.includes('above range')) return 'price_ran_up'
-  if (r.includes('out of range') || r.includes('oor'))           return 'oor_timeout'
-  if (r.includes('manual') || r.includes('closeall') || r.includes('management directive')) return 'manual'
-  if (r.includes('limit_order_') || r.includes('auto_cancel') || r.includes('expired')) return 'lo_cancel'
-  if (r.includes('max hold') || r.includes('max_hold') || r.includes('hold limit')) return 'max_hold'
-  return null  // 'agent decision' and other unclassified reasons
-}
+// Shared with the historical backfill in db/schema.js — see learning/exit-mapper.js.
+const { mapExitTechnique } = require('./learning/exit-mapper')
 
 // ── Auth endpoint (public — no authMiddleware) ────────────────────────────────
 app.post('/api/auth', (req, res) => {
