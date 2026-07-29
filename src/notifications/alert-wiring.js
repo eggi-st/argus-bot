@@ -22,6 +22,19 @@ function init() {
     telegram.observerRecovered({ afterFailedCycles: payload?.afterFailedCycles ?? 0 })
   })
 
+  // Screener stopped returning any pool universe → P1 alert (intake silent-outage guard)
+  bus.onFast('screener_down', payload => {
+    telegram.screenerDown({
+      failedCycles: payload?.failedCycles ?? 0,
+      pipelines:    payload?.pipelines ?? 0,
+    })
+  })
+
+  // Screener producing a universe again → P3 recovery notice
+  bus.onSlow('screener_recovered', payload => {
+    telegram.screenerRecovered({ afterFailedCycles: payload?.afterFailedCycles ?? 0 })
+  })
+
   // Dry run position closed → P3 info
   bus.onSlow('outcome_recorded', payload => {
     if (payload?.net_pnl_pct == null) return

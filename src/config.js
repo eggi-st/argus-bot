@@ -150,6 +150,16 @@ const DEFAULTS = {
     // floor). Guarantees at least 1 dry-run sample per pipeline per scan, preventing the
     // gate from starving new dimensions of data they need to get promoted.
     explorationQuota: { enabled: true },
+    // Silent-outage guard for the intake, mirroring wallet.healthMaxFailedCycles. Raise a
+    // one-shot P1 after this many CONSECUTIVE scans where every pipeline came back with no
+    // pool universe at all (screening call threw, or the API reported 0 matching pools).
+    // A pipeline that screened a real universe and found nothing worth recommending is
+    // healthy — that is a market condition and never counts here.
+    //
+    // 3 rather than the observer's 5 because the cadences differ: the observer polls every
+    // 30s (5 cycles ~ 2.5 min) while the scan runs every 15 min, so 3 cycles is already a
+    // 45-minute total blackout of the pool universe.
+    healthMaxFailedCycles: 3,
   },
   learning: {
     // Pattern confidence gate — blocks (strategy × condition) combos with no proven edge.

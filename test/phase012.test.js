@@ -5,7 +5,9 @@
  */
 const assert = require('assert')
 const { computeSimulatedFeePct, computeSingleSidedPnlPct, rangePctForStrategy } = require('../src/dry-run/engine')
-const { checkPatternGate, wilsonLowerBound, resolveScreening } = require('../src/intelligence/index')
+const { checkPatternGate, wilsonLowerBound, resolveScreening,
+        trackScreenerHealth, _resetScreenerHealth } = require('../src/intelligence/index')
+const bus = require('../src/core/event-bus')
 
 let passed = 0
 function ok(name, fn) {
@@ -136,6 +138,79 @@ ok('rangePctForStrategy maps bins×binStep correctly', () => {
 ok('rangePctForStrategy defaults binStep and clamps', () => {
   assert.ok(approx(rangePctForStrategy('bid_ask', null), 0.34))
   assert.strictEqual(rangePctForStrategy('spot', 500), 0.99)  // 69×5% clamped
+})
+
+console.log('\nScreener health guard (intake silent-outage):')
+function captureScreenerEvents(fn) {
+  const seen = []
+  const onDown = p => seen.push({ e: 'down', ...p })
+  const onUp   = p => seen.push({ e: 'recovered', ...p })
+  bus.on('screener_down', onDown)
+  bus.on('screener_recovered', onUp)
+  try { _resetScreenerHealth(); fn() } finally {
+    bus.off('screener_down', onDown); bus.off('screener_recovered', onUp)
+  }
+  return seen
+}
+ok('a healthy cycle never alerts, however many pipelines find nothing worth taking', () => {
+  // 3 pipelines screened a real universe; blank=0. Finding no candidate is a market
+  // condition, not an outage — this must stay silent forever.
+  const ev = captureScreenerEvents(() => { for (let i = 0; i < 20; i++) trackScreenerHealth(3, 0, 3) })
+  assert.strictEqual(ev.length, 0, JSON.stringify(ev))
+})
+ok('a partial failure never alerts — one live pipeline means the intake is up', () => {
+  const ev = captureScreenerEvents(() => { for (let i = 0; i < 20; i++) trackScreenerHealth(3, 2, 3) })
+  assert.strictEqual(ev.length, 0, JSON.stringify(ev))
+})
+ok('stays silent below the threshold', () => {
+  const ev = captureScreenerEvents(() => {
+    trackScreenerHealth(3, 3, 3); trackScreenerHealth(3, 3, 3)   // 2 all-blank cycles of 3
+  })
+  assert.strictEqual(ev.length, 0, JSON.stringify(ev))
+})
+ok('fires on exactly the Nth consecutive all-blank cycle', () => {
+  const ev = captureScreenerEvents(() => {
+    for (let i = 0; i < 3; i++) trackScreenerHealth(3, 3, 3)
+  })
+  assert.strictEqual(ev.length, 1, JSON.stringify(ev))
+  assert.strictEqual(ev[0].e, 'down')
+  assert.strictEqual(ev[0].failedCycles, 3)
+  assert.strictEqual(ev[0].pipelines, 3)
+})
+ok('re-fires every N cycles while down so a lost P1 is not lost forever', () => {
+  const ev = captureScreenerEvents(() => { for (let i = 0; i < 9; i++) trackScreenerHealth(2, 2, 3) })
+  assert.strictEqual(ev.filter(x => x.e === 'down').length, 3, JSON.stringify(ev))
+})
+ok('recovery fires once, and only after an alert was raised', () => {
+  const ev = captureScreenerEvents(() => {
+    for (let i = 0; i < 3; i++) trackScreenerHealth(2, 2, 3)  // down
+    trackScreenerHealth(2, 0, 3)                              // healthy → recovered
+    trackScreenerHealth(2, 0, 3)                              // still healthy → silent
+  })
+  assert.strictEqual(ev.filter(x => x.e === 'recovered').length, 1, JSON.stringify(ev))
+})
+ok('recovery is silent when no alert had been raised', () => {
+  const ev = captureScreenerEvents(() => {
+    trackScreenerHealth(2, 2, 3)   // one blank cycle, below threshold
+    trackScreenerHealth(2, 0, 3)   // healthy again — nobody was told anything
+  })
+  assert.strictEqual(ev.length, 0, JSON.stringify(ev))
+})
+ok('a scan with zero pipelines configured is a no-op, not an outage', () => {
+  const ev = captureScreenerEvents(() => { for (let i = 0; i < 10; i++) trackScreenerHealth(0, 0, 3) })
+  assert.strictEqual(ev.length, 0, JSON.stringify(ev))
+})
+ok('a crashing scan counts toward the guard — a crash loop is an outage too', () => {
+  // runScan's catch reports the cycle as (1 attempted, 1 blank).
+  const ev = captureScreenerEvents(() => { for (let i = 0; i < 3; i++) trackScreenerHealth(1, 1, 3) })
+  assert.strictEqual(ev.filter(x => x.e === 'down').length, 1, JSON.stringify(ev))
+})
+ok('a crash followed by healthy scans clears the alert', () => {
+  const ev = captureScreenerEvents(() => {
+    for (let i = 0; i < 3; i++) trackScreenerHealth(1, 1, 3)  // crash loop → down
+    trackScreenerHealth(3, 0, 3)                              // scan works again
+  })
+  assert.strictEqual(ev.filter(x => x.e === 'recovered').length, 1, JSON.stringify(ev))
 })
 
 console.log(`\n${passed} assertion(s) passed.`)

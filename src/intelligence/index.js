@@ -585,6 +585,42 @@ function evaluatePool(metrics = {}, strategy = null) {
   }
 }
 
+// ── Screener health (silent-outage guard) ────────────────────────────────────
+// Mirrors the wallet observer's guard, for the same reason: the observer once died on a
+// throttled Helius key and nobody noticed for three weeks, because a failure looked exactly
+// like a quiet market in the logs. The intake side has the same shape and no protection —
+// discoverPools() hits ONE endpoint (pool-discovery-api.datapi.meteora.ag) with no retry,
+// cache or fallback, and a failure is swallowed as `console.error` + `continue`, after which
+// the scan reports success with zero candidates.
+//
+// A cycle counts as DOWN only when EVERY pipeline came back with no universe at all — either
+// the screening call threw, or the API reported 0 matching pools. Pipelines that screened a
+// real universe and simply found nothing worth recommending are healthy, not down: that is a
+// market condition and must never alert.
+let _screenFailedCycles = 0
+let _screenAlertedDown  = false
+
+function trackScreenerHealth(attempted, blank, maxFailed) {
+  if (attempted === 0) return
+  if (blank === attempted) {
+    _screenFailedCycles++
+    // Re-fire every maxFailed cycles rather than exactly once, so a P1 lost to an unreachable
+    // Telegram during the outage that caused it is not lost forever.
+    if (_screenFailedCycles >= maxFailed && (_screenFailedCycles - maxFailed) % maxFailed === 0) {
+      _screenAlertedDown = true
+      console.error(`[IC] Screener DOWN: ${_screenFailedCycles} consecutive cycle(s) with no pool universe across ${attempted} pipeline(s)`)
+      bus.emitSafe('screener_down', { failedCycles: _screenFailedCycles, pipelines: attempted })
+    }
+  } else {
+    if (_screenAlertedDown) {
+      console.log('[IC] Screener recovered — pool universe returning again')
+      bus.emitSafe('screener_recovered', { afterFailedCycles: _screenFailedCycles })
+    }
+    _screenFailedCycles = 0
+    _screenAlertedDown  = false
+  }
+}
+
 /**
  * Run a full screening + strategy routing cycle.
  * Called automatically by the scheduler every 15 minutes.
@@ -621,15 +657,24 @@ async function runScan() {
     let totalScreened = 0
     let totalCandidates = 0
 
+    // Screener-health tally for this cycle. `blank` counts pipelines that came back with no
+    // universe — thrown call OR an API total of 0 — as opposed to a universe that simply
+    // contained nothing worth recommending.
+    let pipelinesAttempted = 0
+    let pipelinesBlank     = 0
+
     for (const pipe of pipelines) {
       const screening = resolveScreening(cfg, pipe.profile)
       let res
+      pipelinesAttempted++
       try {
         res = await getTopCandidates({ limit, screening, pipeline: pipe.profile })
       } catch (e) {
         console.error(`[IC] Pipeline ${pipe.profile} screening failed:`, e.message)
+        pipelinesBlank++
         continue
       }
+      if (!(res.total_screened > 0)) pipelinesBlank++
       totalScreened += res.total_screened || 0
       totalCandidates += res.candidates.length
       console.log(`[IC] Pipeline ${pipe.profile}→${pipe.strategy}: ${res.candidates.length} candidate(s)`)
@@ -665,6 +710,8 @@ async function runScan() {
       }
     }
 
+    trackScreenerHealth(pipelinesAttempted, pipelinesBlank, cfg.scan?.healthMaxFailedCycles ?? 3)
+
     const elapsed = Date.now() - started
     console.log(`[IC] ── Scan done in ${elapsed}ms: ${totalScreened} screened → ${totalCandidates} passed → ${decisions.length} decisions ──`)
 
@@ -681,6 +728,13 @@ async function runScan() {
     return { decisions, total_screened: totalScreened, elapsed_ms: elapsed }
   } catch (err) {
     console.error('[IC] Scan error:', err.message)
+    // A scan that died outright produced no pool universe either, so it counts toward the same
+    // guard. Without this the monitor has a hole exactly where it matters most: a crash loop
+    // looks identical to an upstream outage from the operator's side (nothing gets recommended)
+    // but only the outage would have alerted. The caller only does `.catch(console.error)`.
+    try {
+      trackScreenerHealth(1, 1, getConfig().scan?.healthMaxFailedCycles ?? 3)
+    } catch { /* never let the guard mask the original error */ }
     bus.emitSafe('ui_update', { type: 'scan_error', error: err.message })
     throw err
   } finally {
@@ -720,4 +774,9 @@ function init() {
   console.log('[IC] Intelligence Core ready (scan every 15min)')
 }
 
-module.exports = { init, runScan, checkPatternGate, wilsonLowerBound, resolveScreening, evaluatePool }
+// _resetScreenerHealth is exported for tests only — the counters are module state and a test
+// that ran after a real scan would otherwise inherit it.
+function _resetScreenerHealth() { _screenFailedCycles = 0; _screenAlertedDown = false }
+
+module.exports = { init, runScan, checkPatternGate, wilsonLowerBound, resolveScreening, evaluatePool,
+                   trackScreenerHealth, _resetScreenerHealth }

@@ -170,6 +170,23 @@ class TelegramNotifier {
     )
   }
 
+  screenerDown({ failedCycles, pipelines }) {
+    return this.send(
+      `🛑 <b>SCREENER DOWN</b>\n` +
+      `${failedCycles} scan beruntun tanpa universe pool sama sekali (${pipelines} pipeline).\n\n` +
+      `Intake berhenti — Argus tidak menghasilkan rekomendasi apa pun. ` +
+      `Cek Pool Discovery API (pool-discovery-api.datapi.meteora.ag).`,
+      'P1'
+    )
+  }
+
+  screenerRecovered({ afterFailedCycles }) {
+    return this.send(
+      `✅ <b>Screener pulih</b> — universe pool kembali terisi (setelah ${afterFailedCycles} scan kosong).`,
+      'P3'
+    )
+  }
+
   dryRunResult({ token, strategy, netPnlPct, holdMinutes }) {
     const emoji = netPnlPct >= 0 ? '✅' : '❌'
     return this.send(
