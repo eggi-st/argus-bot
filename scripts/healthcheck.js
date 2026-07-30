@@ -96,5 +96,42 @@ else {
   report('outcome tertaut', linked.c > 0 ? 'OK' : 'WAIT', linked.c + '/' + gq.c + ' — tertaut saat posisi ditutup')
 }
 
+console.log('\n=== JEJAK HARGA POSISI (exit intelligence, langkah 1) ===')
+// An empty table means one of three very different things. Separate them, because only the
+// third is a bug: no position was open, one was open but never detected, or it was detected
+// and sampling still wrote nothing.
+const pp = one('SELECT COUNT(*) baris, COUNT(DISTINCT pool_address) pool FROM position_price_path')
+if (pp.ERR) {
+  report('tabel position_price_path', 'FAIL', pp.ERR)
+} else {
+  const own = one("SELECT COUNT(*) c, MAX(detected_at) terakhir FROM wallet_actions WHERE wallet_type='own' AND action_type='add_liquidity'")
+  const held = all(`
+    SELECT a.pool_address AS pool, MAX(a.detected_at) AS opened_at
+    FROM wallet_actions a
+    WHERE a.wallet_type='own' AND a.action_type='add_liquidity' AND a.pool_address IS NOT NULL
+    GROUP BY a.pool_address
+    HAVING opened_at >= datetime('now','-12 hours')
+       AND opened_at > COALESCE((SELECT MAX(r.detected_at) FROM wallet_actions r
+             WHERE r.wallet_type='own' AND r.action_type='remove_liquidity'
+               AND r.pool_address = a.pool_address), '')
+  `) || []
+
+  report('add_liquidity sendiri terdeteksi', own.c > 0 ? 'OK' : 'FAIL',
+    own.c + ' total, terakhir ' + (own.terakhir || '-'))
+
+  if (pp.baris > 0) {
+    report('jejak terekam', 'OK', pp.baris + ' baris di ' + pp.pool + ' pool')
+  } else if (held.length === 0) {
+    report('jejak terekam', 'WAIT', '0 — tidak ada posisi terbuka 12 jam terakhir, jadi tidak ada yang perlu di-sampel')
+    console.log('         Meridian deploy ~4.6x/hari dgn hold ~58m, jadi posisi terbuka hanya ~19% waktu.')
+    console.log('         Jalankan lagi beberapa jam lagi, atau saat kamu tahu ada posisi jalan.')
+  } else {
+    report('jejak terekam', 'FAIL',
+      '0 padahal ' + held.length + ' posisi TERDETEKSI terbuka (' + held.map(h => h.pool.slice(0, 8)).join(', ') + ')')
+    console.log('         Deteksi jalan tapi sampling tidak menulis. Cek log Argus untuk [ExitPath].')
+    console.log('         Kalau baris "[ExitPath] Ready" tidak ada saat boot, init() tidak terpanggil.')
+  }
+}
+
 console.log('\n' + (fails === 0 ? 'Tidak ada kegagalan.' : fails + ' PEMERIKSAAN GAGAL — lihat baris [FAIL] di atas.') + '\n')
 process.exit(fails === 0 ? 0 : 1)
