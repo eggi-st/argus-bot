@@ -393,6 +393,33 @@ const DEFAULTS = {
     // needs 2× disk free). Set 'full' once manually to shrink an already-bloated file.
     vacuum: 'incremental',
   },
+  // Exit intelligence — step 1 of 2: record the price path of positions Meridian holds.
+  //
+  // Every exit comparison in the existing data is confounded, verified 2026-07-29 across all 593
+  // labelled real exits. Across techniques it is a tautology (il_stop fires BECAUSE the position
+  // was losing, so its -5.94% mean says nothing about the rule). Across thresholds it is
+  // confounded by time — the history does hold a natural experiment, oor_timeout at 15m vs 30m,
+  // and @15m looks better, but the two configs ran in barely overlapping periods and a
+  // permutation test gives p = 0.385.
+  //
+  // The only clean question is counterfactual: given the path this position ACTUALLY took, what
+  // would a different exit rule have returned? That needs the path, and Argus stored two points
+  // per position. So exit learning was never blocked on sample size or on a cleverer model — it
+  // was blocked on a missing measurement. Each position now yields a whole series, which
+  // accumulates far faster than the gate-calibration route: weeks, not months.
+  //
+  // Step 2 (the replay engine) is deliberately NOT built yet. Writing an analyser against an
+  // empty table is exactly how the simulated corpus came to be trusted.
+  exitIntel: {
+    enabled:         true,
+    // Held positions are inferred from our own wallet's on-chain actions: an add_liquidity with
+    // no later remove_liquidity. This cap is essential — without it the query returns positions
+    // closed while the observer was down. On the 2026-07-28 snapshot 4 of 5 "open" positions
+    // dated to 26 June, left by the three-week Helius outage. Real holds average 58 minutes.
+    maxOpenHours:    12,
+    maxPoolsPerTick: 10,   // bounds one tick to 10 API calls even with an observer backlog
+    retentionDays:   90,   // paths are the learning substrate; kept far longer than diagnostics
+  },
   // Portfolio-risk OBSERVATORY. Tracks whether outcomes move together AND whether enough
   // positions are open at once for that to matter. Both are required — perfectly correlated
   // outcomes across a one-position portfolio are just outcomes.

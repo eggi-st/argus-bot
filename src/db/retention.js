@@ -41,6 +41,17 @@ function pruneOldRows() {
     if (g.changes > 0) console.log(`[Retention] Pruned ${g.changes} unlinked gate_queries row(s) older than ${gateDays}d`)
   }
 
+  // position_price_path is the substrate for counterfactual exit replay, so it is kept on its
+  // own (longer) clock rather than the diagnostic one.
+  const pathDays = getConfig().exitIntel?.retentionDays ?? 90
+  if (pathDays > 0) {
+    const pathCutoff = new Date(Date.now() - pathDays * 86_400_000).toISOString()
+    try {
+      const p = db.prepare(`DELETE FROM position_price_path WHERE observed_at < ?`).run(pathCutoff)
+      if (p.changes > 0) console.log(`[Retention] Pruned ${p.changes} price-path row(s) older than ${pathDays}d`)
+    } catch (e) { console.warn('[Retention] price-path prune:', e.message) }
+  }
+
   if (res.changes > 0) {
     console.log(`[Retention] Pruned ${res.changes} screening_rejections row(s) older than ${keepDays}d`)
     // Reclaim the freed pages instead of leaving the file at its high-water mark.

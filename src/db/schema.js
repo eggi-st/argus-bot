@@ -525,6 +525,34 @@ function migrateSchema() {
     if (!e.message?.includes('already exists')) console.warn('[Schema] gate_queries:', e.message)
   }
 
+  // position_price_path — price series for pools Meridian is holding, sampled every 5 minutes.
+  //
+  // Exit intelligence needs counterfactuals: given the path a position ACTUALLY took, what would
+  // a different exit rule have returned? Argus stored two points per position (entry and exit
+  // price) and an ATH watermark, so that question was unanswerable — which is why every exit
+  // comparison in the existing data turned out either tautological (il_stop fires BECAUSE the
+  // position was losing) or confounded by time (oor_timeout @15m vs @30m ran in barely
+  // overlapping periods, p = 0.385).
+  //
+  // fee_active_tvl_ratio rides along because the low_yield exit triggers on it, so replaying
+  // that rule needs the ratio at each step and not just the price.
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS position_price_path (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        pool_address         TEXT    NOT NULL,
+        observed_at          TEXT    NOT NULL,
+        price_sol            REAL,
+        fee_active_tvl_ratio REAL,
+        source               TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_path_pool ON position_price_path(pool_address, observed_at);
+      CREATE INDEX IF NOT EXISTS idx_path_observed ON position_price_path(observed_at);
+    `)
+  } catch (e) {
+    if (!e.message?.includes('already exists')) console.warn('[Schema] position_price_path:', e.message)
+  }
+
   // portfolio_risk — single-row snapshot of whether outcomes move together AND whether enough
   // positions are held at once for that to cost anything. Both are required; either alone is
   // harmless. Advisory only: advised_max_concurrent stays NULL until the gate has held for
