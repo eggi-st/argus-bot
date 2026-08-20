@@ -1,15 +1,14 @@
 'use strict'
 // Phase 5 — system self-report. Assembles a STRUCTURED, read-only bundle (pattern stats +
-// capability gaps + recent tuning events) and renders an honest status narration. The MVP is a
-// deterministic template; an LLM variant (behind ai.selfReport.useLlm) may only re-narrate the
-// pre-computed numbers at temperature 0 — it can never compute stats or emit a decision.
+// capability gaps + recent tuning events) and renders an honest status narration from a
+// deterministic template. The optional LLM re-narration was removed in the Tier-A prune —
+// it never ran once (ai.enabled false since it shipped), and the template is the source of truth.
 // This module imports NO write path (no writeUserConfig / riskState / gate / recordDecision):
 // it reads, writes a report row, and emits a UI event. Structurally cannot move money or config.
 const db  = require('../db/database')
 const bus = require('../core/event-bus')
 const { getConfig } = require('../config')
 const { recordSystemReport, listOpenGaps, getTuningEvents } = require('../db/schema')
-const { callLLM } = require('./llm-client')
 
 const safe = (fn, fallback) => { try { return fn() } catch { return fallback } }
 
@@ -89,52 +88,16 @@ function renderDeterministic(b) {
   return lines.join('\n')
 }
 
-// Optional LLM narration — summarize-only, guarded. Returns null on any failure/violation so the
-// caller falls back to the deterministic template (the always-available source of truth).
-async function renderLLM(bundle, cfg) {
-  const sr = cfg.ai?.selfReport || {}
-  const bundleStr = JSON.stringify(bundle)
-  const prompt =
-    `You are a status narrator. Summarize the following Argus system state in plain language for the operator. ` +
-    `STRICT RULES: only restate facts present in the JSON; do NOT compute new numbers; do NOT recommend, ` +
-    `advise, or use decision verbs (deploy/avoid/buy/sell/increase/decrease/recommend). Numbers in your ` +
-    `output must appear verbatim in the JSON.\n\nJSON:\n${bundleStr}`
-  let text
-  try {
-    text = await callLLM(prompt, { ...cfg.ai, temperature: sr.llmTemperature ?? 0, maxTokens: sr.llmMaxTokens ?? 400 })
-  } catch (e) {
-    console.warn('[SelfReport] LLM failed, using deterministic:', e.message)
-    return null
-  }
-  // Verb guard
-  if (/\b(deploy|avoid|buy|sell|increase|decrease|recommend|should)\b/i.test(text)) {
-    console.warn('[SelfReport] LLM used a decision verb — rejecting, using deterministic')
-    return null
-  }
-  // Numeric guard: every number in the narration must exist in the bundle
-  const nums = text.match(/[0-9]+(\.[0-9]+)?/g) || []
-  for (const n of nums) {
-    if (!bundleStr.includes(n)) {
-      console.warn(`[SelfReport] LLM emitted unseen number "${n}" — rejecting, using deterministic`)
-      return null
-    }
-  }
-  return text
-}
-
 async function generateSystemReport() {
   const cfg = getConfig()
   if (cfg.ai?.selfReport?.enabled === false) return null
   const bundle = buildReportBundle(cfg)
+  // Narration is deterministic-only. The guarded LLM path was removed in the Tier-A prune
+  // (2026-08-20): ai.enabled and selfReport.useLlm had both been false since the feature
+  // shipped, so every one of the 60 recorded reports was rendered by the template below.
   let text = renderDeterministic(bundle)
-  let via = 'deterministic'
-  let llm_fallback = 0
-
-  if (cfg.ai?.selfReport?.useLlm && cfg.ai?.enabled) {
-    const llmText = await renderLLM(bundle, cfg)
-    if (llmText) { text = llmText; via = 'llm' }
-    else llm_fallback = 1
-  }
+  const via = 'deterministic'
+  const llm_fallback = 0
   const maxChars = cfg.ai?.selfReport?.maxReportChars ?? 1500
   if (text.length > maxChars) text = text.slice(0, maxChars - 1) + '…'
 

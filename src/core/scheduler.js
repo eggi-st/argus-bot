@@ -31,20 +31,13 @@ function start() {
     bus.emitSafe('ttl_check', { ts: Date.now() })
   })
 
-  // ── Dry run update: every 5 minutes ──────────────────────────────────────
-  // Phase 2 will use this to update virtual position P&L
+  // ── 5-minute sampling tick ──────────────────────────────
+  // Drives learning/exit-path-tracker, which samples the price of every pool Meridian is
+  // currently holding. The event name is kept because the dry-run simulator originally
+  // owned this tick; the simulator went in the Tier-A prune, the sampler inherited it.
+  // DO NOT REMOVE: position_price_path is the only un-confounded exit measurement Argus has.
   schedule('dry-run-update', '*/5 * * * *', () => {
     bus.emitSafe('dry_run_update', { trigger: 'scheduled', ts: Date.now() })
-  })
-
-  // ── Hivemind discovery: every 6 hours ────────────────────────────────────
-  // Scans Meteora on-chain (+ fallback sources) for new smart money wallets.
-  // Sources manage their own cooldown/backoff internally.
-  schedule('hivemind', '0 */6 * * *', () => {
-    const hivemind = require('../wallet/hivemind-discovery')
-    hivemind.runDiscovery().catch(e =>
-      console.error('[Hivemind] Discovery error:', e.message)
-    )
   })
 
   // ── Daily reset: midnight ─────────────────────────────────────────────────
@@ -73,13 +66,6 @@ function start() {
   if (aiCfg.selfReport?.enabled !== false && aiCfg.selfReport?.digestCron) {
     schedule('self-report-digest', aiCfg.selfReport.digestCron, () => {
       bus.emitSafe('self_report_due', { ts: Date.now() })
-    })
-  }
-
-  // ── Auto-tuner cycle (no-op while learning.autoTuner.enabled = false) ──────
-  if (learnCfg.autoTuner?.enabled) {
-    schedule('auto-tune', learnCfg.autoTuner.intervalCron || '0 */1 * * *', () => {
-      bus.emitSafe('tuner_cycle', { ts: Date.now() })
     })
   }
 
