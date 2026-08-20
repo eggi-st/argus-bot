@@ -167,14 +167,6 @@ async function runSource(name, ctx) {
       const { discoverFromHelius } = require('./sources/helius-source')
       return discoverFromHelius(ctx)
     }
-    case 'solscan': {
-      const { discoverFromSolscan } = require('./sources/solscan-source')
-      return discoverFromSolscan(ctx)
-    }
-    case 'okx': {
-      const { discoverFromOkx } = require('./sources/okx-source')
-      return discoverFromOkx(ctx)
-    }
     default:
       throw new Error(`Unknown source: ${name}`)
   }

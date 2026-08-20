@@ -13,7 +13,9 @@ function getPattern(volatilityBucket, regime, strategy, feeBucket = 'medium', ag
 }
 
 /**
- * Per-strategy base win rate — the shrinkage target for adjustScore. NOT 0.5, so genuinely-bad
+ * Per-strategy base win rate. NO LONGER ON THE CONFIDENCE PATH: it was the shrinkage target
+ * for adjustScore, which the Tier-A prune neutralised. Kept because it is a correct, tested
+ * read of the real-vs-sim base rate and is useful for analysis. NOT 0.5, so genuinely-bad
  * strategies are not flattered by a neutral coin-flip prior.
  *
  * REAL outcomes first, simulation only as a fallback. This used to read dry_run_positions
@@ -61,41 +63,28 @@ function getBaseRate(strategy, cfg) {
 }
 
 /**
- * Blend the rule-based score with a sample-size-shrunk, EMA-weighted historical win rate.
- *   p_score  = N/(N+k)·ema_win_rate + k/(N+k)·baseRate   (shrinks toward base rate on thin N)
- *   adjusted = rawScore·(1−w) + p_score·w
- * Only applies once the pattern is ACTIVE (promoted); calibrating patterns return rawScore
- * unchanged so cold-start exploration is never damped. GATING uses cumulative Wilson, not this.
+ * NEUTRALISED in the Tier-A prune (2026-08-20). Returns rawScore unchanged, always.
+ *
+ * WHY: the gate accumulated 255 real outcomes on both arms (Meridian trades regardless of the
+ * verdict, so both a treated and an untreated arm exist). Pools Argus recommended returned
+ * +0.05% mean / 64.0% win (n=139); pools it rejected returned +0.16% / 68.1% (n=116) — diff
+ * -0.11pp, t = -0.46. Confidence-vs-outcome correlation over the same corpus is r = 0.028
+ * (n=160), down from rho .083 at n=102: more data moved it toward zero, not away.
+ *
+ * The pattern library that fed this blend is itself mis-promoted — of its 10 active cells,
+ * most carry a NEGATIVE mean_pnl_net (high/neutral/spot -0.20 over N=258, medium/neutral/bid_ask
+ * -0.96 over N=102) despite 59-73% win rates, because promotion scores win-rate and the loss
+ * tail eats the wins. Blending that into confidence propagates the same error.
+ *
+ * Patterns are still RECORDED and reconciled — the library remains the substrate for any future
+ * analysis, and getPatternContext still renders it for the dashboard. It just no longer moves a
+ * number that was measured not to predict anything. Restoring the blend means first showing, on
+ * held-out real outcomes, that it beats not blending.
+ *
+ * The signature is preserved so callers and their confidence traces keep working.
  */
-function adjustScore(rawScore, pattern, cfg, strategy) {
-  if (!pattern?.active) return rawScore
-  // STEP 1: sim-backed patterns are NEUTRAL — never let an unverified (simulation-only)
-  // win rate boost live confidence. Only REAL-outcome-backed patterns adjust the score.
-  if (pattern.source === 'sim') return rawScore
-  const L = (cfg && cfg.learning) || {}
-  const w = L.patternWeight ?? 0.30
-  const k = L.shrinkageK ?? 20
-  const N = pattern.sample_count ?? 0
-  const ema = pattern.ema_win_rate != null ? pattern.ema_win_rate : (pattern.win_rate ?? 0.5)
-  const r0 = getBaseRate(strategy, cfg)
-  const denom = N + k
-  // Win-rate shrinkage (unchanged): shrinks toward per-strategy base rate on thin data.
-  const wrScore = denom > 0 ? (N / denom) * ema + (k / denom) * r0 : r0
-
-  // Payoff quality term: payoff_ratio = avg_win / |avg_loss|.
-  // Normalize via ratio/(ratio+1) → [0,1]: ratio=1 maps to 0.5 (neutral), >1 is better.
-  // Falls back to 0.5 (neutral) when data is missing so thin patterns are never penalised.
-  let payoffNorm = 0.5
-  if (pattern.avg_win_pnl != null && pattern.avg_loss_pnl != null && pattern.avg_loss_pnl < 0) {
-    const ratio = pattern.avg_win_pnl / Math.abs(pattern.avg_loss_pnl)
-    payoffNorm = Math.min(1, Math.max(0, ratio / (ratio + 1)))
-  }
-
-  // Historical score = 70% win-rate momentum + 30% payoff quality.
-  // This makes the confidence directly sensitive to risk/reward, not just frequency of wins.
-  const historicalScore = 0.7 * wrScore + 0.3 * payoffNorm
-  const adjusted = rawScore * (1 - w) + historicalScore * w
-  return Math.min(1, Math.max(0, adjusted))
+function adjustScore(rawScore, _pattern, _cfg, _strategy) {
+  return rawScore
 }
 
 /**

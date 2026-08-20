@@ -74,19 +74,9 @@ const DEFAULTS = {
         // NOTE: maxVolatility is NOT set here — it derives from strategy.spotMaxVolatility
         // (single source of truth) via resolveScreening(), so one knob drives both the spot
         // screener cap and the spot router eligibility. Keeping a second copy here would let
-        // them drift and would give the auto-tuner two incoherent gates to move.
+        // them drift and would give two incoherent gates to any future tuner.
         minTokenAgeHours: 24,    // older than the fresh-meme bid_ask universe
         maxTokenAgeHours: null,  // no upper age bound — let established calm pools through
-      },
-      limit_order: {
-        // Established tokens that have had time to peak and pull back. Needs price_vs_ath_pct
-        // (OKX maxPrice in prod, or Argus's internal ATH water mark as fallback) to qualify —
-        // until that fills, this pipeline is a safe no-op surfaced by self-diagnosis.
-        // maxVolatility derives from limitOrder.maxVolatility via resolveScreening (single source).
-        minTokenAgeHours: 168,   // ≥7 days
-        maxTokenAgeHours: null,
-        minHolders: 500,
-        minTvl: 10_000,
       },
     },
   },
@@ -97,27 +87,15 @@ const DEFAULTS = {
     spotFeeTvlMin: 0.1,
     spotFeeTvlMax: 0.4,
   },
-  limitOrder: {
-    // Phase 3: limit_order eligibility is gated by an indicator technique (bb_plus_rsi)
-    // when indicators.enabled, falling back to this ATH gate when OHLCV is unavailable.
-    maxPriceVsAthPct: 70,   // token must be ≤ 70% of ATH (some pullback)
-    minPriceVsAthPct: 20,   // but not < 20% (potential dead token)
-    maxVolatility: 2.0,      // low volatility preferred — stable base for LO entry
-    minOrganic: 50,
-    minHolders: 500,
-    minTvl: 10_000,
-  },
   // agentMeridian shared API — OHLCV-derived chart indicators (read-only public key).
   api: {
     url: process.env.AGENT_MERIDIAN_URL || 'https://api.agentmeridian.xyz/api',
     publicApiKey: process.env.AGENT_MERIDIAN_KEY || 'bWVyaWRpYW4taXMtdGhlLWJlc3QtYWdlbnRz',
   },
-  // Indicator-driven entry (Phase 3). Powers limit_order's bb_plus_rsi gate + supertrend_or_rsi
-  // shadow A/B. Pure dip-confirmation matches the bid-below-price mechanic; see the design doc.
+  // Indicator-driven entry. The limit_order presets (bb_plus_rsi primary + supertrend_or_rsi
+  // shadow A/B) were removed with the strategy itself in the Tier-A prune (2026-08-20).
   indicators: {
     enabled: true,
-    limitOrderEntryPreset: 'bb_plus_rsi',        // primary gate for limit_order
-    limitOrderShadowPreset: 'supertrend_or_rsi', // shadow-recorded for A/B (does not gate)
     // Entry preset for spot pipeline (soft boost, not hard gate — unlike LO's bb_plus_rsi).
     // 'rsi_reversal' fires when RSI <= rsiOversold (entering at a local dip reduces IL risk).
     // Set to null to disable spot indicator enrichment.
@@ -138,12 +116,12 @@ const DEFAULTS = {
     topCandidateLimit: 10,
     // Each pipeline screens its own universe and records ONLY its strategy, so every strategy
     // can gather samples instead of bid_ask always winning a single global candidate pool.
-    // limit_order is intentionally omitted: price_vs_ath_pct is null for fresh tokens (OKX has
-    // no maxPrice), so it would find zero candidates until an ATH-data source is wired.
+    // limit_order was REMOVED in the Tier-A prune (2026-08-20): it was never executed live —
+    // zero rows in feedback_outcomes across the whole corpus — while its simulator kept
+    // producing 1091 dry-run positions at 25% win / -0.18% mean. Pure compute + corpus noise.
     pipelines: [
       { profile: 'bid_ask',     strategy: 'bid_ask' },
       { profile: 'spot',        strategy: 'spot' },
-      { profile: 'limit_order', strategy: 'limit_order' },
     ],
     // Exploration quota: when every candidate in a pipeline is blocked by the active-pattern
     // gate, force the top candidate through (bypassing statistical gate, keeping confidence
@@ -267,35 +245,6 @@ const DEFAULTS = {
       // majority of everything rejected, which is rare enough to be worth a look.
       screeningSaturationRatio: 0.50,
       cron: '0 */6 * * *',
-    },
-    // Phase 4B — bounded auto-tuner. Ships OFF. Proposes damped, clamped deltas only when
-    // reconciled per-strategy evidence is statistically significant. SHADOW = propose+log+notify
-    // (no write); APPLY (write user-config) requires explicit opt-in + per-event human approval.
-    // 2026-06-30 corrections (validated via preview-tuner.js on 435 real closes): the tuner now
-    // (1) drives off REAL outcomes (feedback_outcomes) when a strategy has >= minSamplesPerStrategy,
-    // falling back to SIM only below that; (2) refuses to WIDEN a strategy whose mean P&L < meanFloorForWiden
-    // — real spot was 63% WR but −0.18% mean (fat loss tail), so WR-alone would wrongly widen a net loser.
-    autoTuner: {
-      enabled: false,           // master switch — OFF until there is real per-strategy data
-      mode: 'shadow',           // 'shadow' (propose only) | 'apply' (write, still gated)
-      intervalCron: '0 */1 * * *',
-      minSamplesPerStrategy: 50,  // SHADOW propose floor + "trust REAL over SIM" threshold
-      realSampleMin: 100,         // APPLY floor (per strategy)
-      breakEvenWinRate: 0.50,
-      meanFloorForWiden: 0,       // never WIDEN a strategy whose mean net P&L is below this (loss-tail guard)
-      hysteresisBand: 0.05,       // Wilson bound must clear break-even by this margin
-      wilsonZ: 1.96,              // stricter than the gate's 1.0
-      maxStepsPerCycle: 1,
-      cooldownSamples: 45,        // ≥ this many NEW closed positions before re-moving a param
-      explorationQuota: 0,        // fraction of decisions forced from non-top pools (0 = off for now)
-      // Tunable scalar whitelist. min = launch default = one-directional guard: the tuner can only
-      // move a knob in the SAFE direction (widen spot vol from 2.0↑; make gate floors STRICTER only).
-      // v1 acts on spotMaxVolatility only; gate-floor tuning is wired but deferred.
-      params: {
-        'strategy.spotMaxVolatility':         { min: 2.0,  max: 3.0,  step: 0.25 },
-        'learning.confidenceGate.minWinRate': { min: 0.35, max: 0.50, step: 0.05 },
-        'learning.confidenceGate.minMeanPnl': { min: -1.0, max: 0.0,  step: 0.25 },
-      },
     },
   },
   dryRun: {
@@ -478,29 +427,15 @@ const DEFAULTS = {
       // Sources never attempted. A disabled source gets no discovery_sources row and cannot
       // be revived from the Web UI — config wins over a resume click.
       //
-      // Both entries below are off because they have no viable path to working without a paid
-      // key. Neither ever contributed a wallet; both sat late in the priority chain burning a
-      // retry every cycle. Removing them is purely subtractive — no discovery capability lost.
-      //
-      // 'okx' — needs okx.apiKey, which is not configured, so every daily retry failed
-      // ("OKX API key not configured", 17 straight failures on the VPS as of 2026-07-28). The
-      // rug/honeypot data it was meant to supply now comes from the no-auth Jupiter enrichment
-      // in screener.js.
-      // NOTE: this only disables OKX as a WALLET-DISCOVERY source. The separate OKX enrichment
-      // path in intelligence/screener.js (enrichWithOkx) is unaffected and still runs keyless.
-      //
-      // 'solscan' — the host it calls, api.solscan.io, no longer resolves at all (DNS
-      // NXDOMAIN, verified 2026-07-28); Solscan retired it. fetch() therefore rejects at the
-      // network layer, before any HTTP status check, and the catch in solscan-source.js only
-      // re-throws on 'rate limit'/'denied' — so all 5 tokens fall through to the generic
-      // "Solscan returned no usable holder data", which misleadingly implies the API answered.
-      // Successors need a paid key: pro-api.solscan.io/v2.0 → 401 "Token is missing";
-      // public-api.solscan.io → 404.
-      // BEFORE RE-ENABLING, solscan-source.js needs three fixes: (1) point at pro-api /v2.0 with
-      // an auth header, (2) its token query is `SELECT DISTINCT … LIMIT 5` with no ORDER BY, so
-      // DISTINCT's sort makes it always pick the 5 alphabetically-lowest mints — stale ones —
-      // never the newest, (3) `created_at > datetime('now','-7 days')` compares ISO-with-T/Z
-      // against SQLite's space-separated format; use julianday() on both sides.
+      // 'okx' and 'solscan' were DELETED in the Tier-A prune (2026-08-20), not just disabled:
+      // neither ever contributed a wallet and neither had a path to working without a paid key.
+      // okx needed okx.apiKey (17 straight failures on the VPS as of 2026-07-28); solscan's host
+      // api.solscan.io stopped resolving entirely (DNS NXDOMAIN, verified same day). The names
+      // stay listed here so a stale user-config that still references them keeps loading; the
+      // source files are gone, so re-enabling one now throws "Unknown source" instead of failing
+      // silently every cycle. Reviving either means writing a new source module against a paid
+      // endpoint. NOTE: this concerns WALLET DISCOVERY only — the separate keyless OKX enrichment
+      // in intelligence/screener.js (enrichWithOkx) is untouched and still runs.
       disabledSources: ['okx', 'solscan'],
     },
     // Lifecycle state machine for tracked smart-money wallets.
@@ -674,7 +609,9 @@ function validatePatch(patch, base = '') {
  * Atomically merge `patch` into the on-disk user-config.json (NOT the DEFAULTS-merged
  * runtime config — that would freeze current defaults into the user file), then invalidate
  * the cache so the next getConfig() (and the next scan) observe the change. This is the only
- * sanctioned runtime config writer; the auto-tuner uses it. Returns the merged user object.
+ * sanctioned runtime config writer. Its only runtime caller (the auto-tuner) was removed in
+ * the Tier-A prune, so nothing writes config at runtime today; the API and its tests remain
+ * so a future writer has one audited path. Returns the merged user object.
  */
 function writeUserConfig(patch) {
   const safe = validatePatch(patch)

@@ -22,8 +22,8 @@ async function init() {
   const { initSchema } = require('../db/schema')
   initSchema()
 
-  // Config write-path sanity: confirm the user-config dir is writable so a runtime
-  // writeUserConfig() (auto-tuner) cannot silently fail mid-run.
+  // Config write-path sanity: confirm the user-config dir is writable so any runtime
+  // writeUserConfig() cannot silently fail mid-run.
   try {
     const fs = require('fs')
     const dir = require('path').dirname(require('path').join(process.cwd(), 'user-config.json'))
@@ -43,8 +43,6 @@ async function init() {
   process.stdout.write('[Init] Layer 2 · Intelligence Core... ')
   const ic = require('../intelligence/index')
   ic.init()
-  const dryRun = require('../dry-run/engine')
-  dryRun.init()
   console.log('✓')
 
   // ── Layer 3: Scheduler + Wallet Observer ─────────────────────────────────
@@ -69,12 +67,6 @@ async function init() {
   require('../learning/exit-path-tracker').init()
   require('../intelligence/diagnostics').init()
   require('../ai/system-report').init()
-  require('../learning/auto-tuner').init()
-  console.log('✓')
-
-  process.stdout.write('[Init] Layer 4 · Hivemind Discovery... ')
-  const hivemind = require('../wallet/hivemind-discovery')
-  hivemind.init()
   console.log('✓')
 
   process.stdout.write('[Init] Layer 4 · Wallet Lifecycle... ')

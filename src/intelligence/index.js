@@ -4,13 +4,12 @@ const riskState = require('../core/risk-state')
 const { recordDecision } = require('../db/schema')
 const { getTopCandidates } = require('./screener')
 const { scoreStrategies } = require('./strategy-router')
-const { enrichWithIndicators, enrichSpotIndicators } = require('./chart-indicators')
+const { enrichSpotIndicators } = require('./chart-indicators')
 const { techniqueAuthor } = require('./techniques')
 const { getConfig } = require('../config')
 const { parseBucket }      = require('../learning/pattern-updater')
 const { getPattern, adjustScore } = require('../learning/pattern-reader')
 const { normalizeScore }   = require('./score-normalizer')
-const { generateVerdict }  = require('../ai/verdict-generator')
 const telegram             = require('../notifications/telegram')
 const db                   = require('../db/database')
 const dryRun               = require('../dry-run/engine')
@@ -206,12 +205,10 @@ function resolveScreening(cfg, profileKey) {
   delete base.profiles
   const override = cfg.screening?.profiles?.[profileKey]
   const merged = override ? { ...base, ...override } : base
-  // Single source of truth for each strategy's vol cap, so the screener and the router can
-  // never drift apart (spot ← strategy.spotMaxVolatility, limit_order ← limitOrder.maxVolatility).
+  // Single source of truth for the spot vol cap, so the screener and the router can never
+  // drift apart (spot ← strategy.spotMaxVolatility).
   if (profileKey === 'spot' && cfg.strategy?.spotMaxVolatility != null) {
     merged.maxVolatility = cfg.strategy.spotMaxVolatility
-  } else if (profileKey === 'limit_order' && cfg.limitOrder?.maxVolatility != null) {
-    merged.maxVolatility = cfg.limitOrder.maxVolatility
   }
   return merged
 }
@@ -327,7 +324,6 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
   }
 
   // Soft indicator boost for spot (non-blocking — attribution + small confidence lift).
-  // For limit_order, the lo_indicator gate is applied in the strategy router instead.
   if (pool.entry_indicator && !pool.entry_indicator.skipped && pool.entry_indicator.confirmed) {
     confidence = Math.min(1, confidence * 1.10)
     pool.entry_technique = pool.entry_indicator.technique
@@ -389,8 +385,9 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
   }
 
   // Technique provenance (the third axis): which named, authored rule triggered this.
-  // limit_order carries its indicator technique (bb_plus_rsi/ath_pullback); bid_ask/spot
-  // enter via the router gate today. Shadow A/B (supertrend_or_rsi) is recorded, not gated.
+  // bid_ask/spot enter via the router gate; spot may also carry its soft entry indicator.
+  // The limit_order indicator path (bb_plus_rsi + supertrend_or_rsi shadow A/B) went with
+  // the strategy in the Tier-A prune, so `shadow` is now always null.
   const primaryTechnique = score.technique || 'vol_feetvl_gate'
   const techAuthor = score.author || techniqueAuthor(primaryTechnique).author
   const provenance = {
@@ -399,15 +396,10 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
     primary_technique: primaryTechnique,
     author: techAuthor,
     confirmations: [
-      ...(pool.lo_indicator ? [{ technique: pool.lo_indicator.technique, author: pool.lo_indicator.author,
-        confirmed: pool.lo_indicator.confirmed, reason: pool.lo_indicator.reason, skipped: pool.lo_indicator.skipped || false }] : []),
       ...(pool.entry_indicator ? [{ technique: pool.entry_indicator.technique, author: pool.entry_indicator.author,
         confirmed: pool.entry_indicator.confirmed, reason: pool.entry_indicator.reason, skipped: pool.entry_indicator.skipped || false }] : []),
     ],
-    shadow: pool.lo_shadow ? {
-      technique: pool.lo_shadow.technique, confirmed: pool.lo_shadow.confirmed,
-      reason: pool.lo_shadow.reason, skipped: pool.lo_shadow.skipped || false,
-    } : null,
+    shadow: null,
     ...(exploration ? { exploration: true } : {}),
   }
   pool.entry_technique = primaryTechnique  // flows into the dry-run position record
@@ -434,13 +426,6 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
 
     const decisionId = result.lastInsertRowid
 
-    // Open a dry run position immediately so we start tracking P&L
-    try {
-      dryRun.openForDecision(decisionId, pool, forceStrategy)
-    } catch (drErr) {
-      console.error(`[IC] Failed to open dry run for decision #${decisionId}:`, drErr.message)
-    }
-
     // Telegram alert — fire-and-forget. Include entry parameters for manual execution
     // (single-sided SOL bid BELOW price): entry price + the downward range it covers.
     const _rangePct = dryRun.rangePctForStrategy(forceStrategy, pool.bin_step)
@@ -455,11 +440,6 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
       rangePct:   _rangePct ?? null,
       rangeLow:   (pool.price != null && _rangePct != null) ? pool.price * (1 - _rangePct) : null,
     }).catch(e => console.warn('[IC] Telegram alert failed:', e.message))
-
-    // Fire-and-forget LLM verdict (only if AI enabled in config)
-    if (cfg.ai?.enabled) {
-      generateVerdict(decisionId, pool, forceStrategy, bucket, indicators, cfg.ai)
-    }
 
     // Meridian integration — push signal via webhook (fire-and-forget)
     if (cfg.meridian?.enabled && cfg.meridian?.webhookUrl) {
@@ -497,7 +477,7 @@ function processPool(pool, cfg, forceStrategy, { exploration = false } = {}) {
  * Reuses the SAME shared scoring/gate/modifier functions as processPool — only the orchestration is
  * duplicated (read-only). KEEP THE CONFIDENCE-BUILD SEQUENCE IN SYNC WITH processPool: base score →
  * pattern adjust → smart-money → entry-indicator → liquidity → age. Indicator enrichment is skipped
- * here (caller may pass pool.entry_indicator/lo_indicator if it has them).
+ * here (caller may pass pool.entry_indicator if it has it).
  *
  * @param metrics  pool metrics Meridian already holds (volatility, fee_active_tvl_ratio, tvl, mcap,
  *                 holders, token_age_hours, bin_step, organic_score, price/volume_change_pct, ...)
@@ -521,7 +501,7 @@ function evaluatePool(metrics = {}, strategy = null) {
     price_change_pct: metrics.price_change_pct, volume_change_pct: metrics.volume_change_pct,
     price_vs_ath_pct: metrics.price_vs_ath_pct, dev_sold_all: metrics.dev_sold_all,
     volume_trend: metrics.volume_trend, entry_phase: metrics.entry_phase,
-    lo_indicator: metrics.lo_indicator ?? null, entry_indicator: metrics.entry_indicator ?? null,
+    entry_indicator: metrics.entry_indicator ?? null,
   }
 
   const tokenGate = riskState.check(pool.base.mint)
@@ -700,12 +680,6 @@ async function runScan() {
       totalCandidates += res.candidates.length
       console.log(`[IC] Pipeline ${pipe.profile}→${pipe.strategy}: ${res.candidates.length} candidate(s)`)
 
-      // Phase 3: gate limit_order on an indicator technique (bb_plus_rsi) + shadow A/B.
-      // Parallel-fetch indicators only for the LO pipeline; failures fall back to the ATH gate.
-      if (pipe.strategy === 'limit_order') {
-        try { await enrichWithIndicators(res.candidates, cfg) }
-        catch (e) { console.warn('[IC] indicator enrich failed:', e.message) }
-      }
       // Phase 3+: soft entry indicator for spot (non-blocking — boosts confidence if confirmed).
       // bid_ask skipped: SOL bids benefit from overbought entries (price likely to fall toward bid).
       if (pipe.strategy === 'spot') {

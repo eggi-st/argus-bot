@@ -58,20 +58,24 @@ console.log('Phase 4A — writeUserConfig round-trip (backs up + restores real f
   }
 }
 
-console.log('Phase 3a — shrinkage + EMA scoring:')
+console.log('Phase 3a — adjustScore is neutralised (Tier-A prune 2026-08-20):')
 const cfg = getConfig()
-ok('inactive pattern → rawScore unchanged (cold-start dormancy)', () => {
+ok('active pattern no longer moves the score', () => {
+  // The blend was removed after the gate's two-arm test measured no edge (recommended n=139
+  // +0.05% vs rejected n=116 +0.16%, t=-0.46) and confidence-vs-outcome r=0.028 (n=160).
+  assert.strictEqual(adjustScore(0.5, { active: 1, sample_count: 200, ema_win_rate: 0.9, source: 'real' }, cfg, 'bid_ask'), 0.5)
+})
+ok('inactive pattern also returns rawScore unchanged', () => {
   assert.strictEqual(adjustScore(0.5, { active: 0, sample_count: 1, ema_win_rate: 1 }, cfg, 'bid_ask'), 0.5)
 })
-ok('small-N active pattern shrinks toward base rate', () => {
-  // N=5,k=20,ema=0.9,base=0.5 → p=0.58; adj=0.5*0.7+0.58*0.3=0.674... wait raw0.5
-  const adj = adjustScore(0.5, { active: 1, sample_count: 5, ema_win_rate: 0.9 }, cfg, 'bid_ask')
-  assert.ok(approx(adj, 0.5 * 0.7 + 0.58 * 0.3, 0.02), `adj=${adj}`)
+ok('sample size and win rate are both inert now', () => {
+  const small = adjustScore(0.42, { active: 1, sample_count: 5,   ema_win_rate: 0.9 }, cfg, 'bid_ask')
+  const large = adjustScore(0.42, { active: 1, sample_count: 200, ema_win_rate: 0.9 }, cfg, 'bid_ask')
+  assert.strictEqual(small, 0.42)
+  assert.strictEqual(large, 0.42)
 })
-ok('large-N weights EMA more than small-N (for ema>base)', () => {
-  const small = adjustScore(0.5, { active: 1, sample_count: 5,   ema_win_rate: 0.9 }, cfg, 'bid_ask')
-  const large = adjustScore(0.5, { active: 1, sample_count: 200, ema_win_rate: 0.9 }, cfg, 'bid_ask')
-  assert.ok(large > small, `large=${large} small=${small}`)
+ok('a missing pattern is still safe', () => {
+  assert.strictEqual(adjustScore(0.77, null, cfg, 'spot'), 0.77)
 })
 ok('getBaseRate prefers the REAL corpus over simulation', () => {
   // Self-consistent rather than hardcoded: derive the expectation from whatever this database

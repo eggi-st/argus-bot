@@ -37,7 +37,7 @@ function classify(reasonKey, strategy, ratio) {
         action: `Strategy "${strategy}" can never qualify without ATH/price-history data — OKX returns no maxPrice for fresh tokens. Wire a second source (Birdeye/Dexscreener) before expecting ${strategy} samples.` }
     case 'vol_over_cap':
       return { kind: 'threshold_saturation', severity: 'medium',
-        action: `Most candidates exceed the volatility cap for "${strategy}". Verify its dedicated pipeline universe, or consider raising the cap (auto-tuner territory once data exists).` }
+        action: `Most candidates exceed the volatility cap for "${strategy}". Verify its dedicated pipeline universe, or consider raising the cap.` }
     case 'fee_tvl_below_min': case 'fee_tvl_yield_trap':
       return { kind: 'threshold_saturation', severity: 'low',
         action: `Many candidates fall outside the fee/TVL band for "${strategy}".` }

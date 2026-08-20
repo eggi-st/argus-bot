@@ -402,7 +402,9 @@ function migrateSchema() {
     if (!e.message?.includes('already exists')) console.warn('[Schema] system_reports:', e.message)
   }
 
-  // tuning_events table — Phase 4B auto-tuner audit (proposals/applies/reverts)
+  // tuning_events table — audit of runtime config changes. The Phase 4B auto-tuner that wrote
+  // it was removed in the Tier-A prune (2026-08-20) having never written a row; the table is
+  // kept so the historical schema and the self-report bundle that reads it stay intact.
   try {
     db.exec(`
       CREATE TABLE IF NOT EXISTS tuning_events (

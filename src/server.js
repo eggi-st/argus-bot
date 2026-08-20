@@ -1009,24 +1009,10 @@ app.get('/api/tuning-events', (req, res) => {
   }
 })
 
-app.post('/api/tuning-events/:id/approve', express.json(), (req, res) => {
-  try {
-    const r = require('./learning/auto-tuner').approveProposal(parseInt(req.params.id, 10))
-    res.status(r.ok ? 200 : 400).json(r)
-  } catch (e) {
-    res.status(500).json({ error: e.message })
-  }
-})
-
-app.post('/api/tuning-events/:id/reject', express.json(), (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10)
-    const n = db.prepare(`UPDATE tuning_events SET status='rejected' WHERE id=? AND status='proposed'`).run(id)
-    res.json({ ok: n.changes > 0 })
-  } catch (e) {
-    res.status(500).json({ error: e.message })
-  }
-})
+// tuning_events is read-only now: the tuner that wrote it was removed in the Tier-A prune
+// (2026-08-20). It never ran — enabled:false since it shipped, 0 rows ever written — so the
+// approve/reject routes had nothing to act on. The listing stays so the historical table
+// (and the self-report bundle that reads it) keeps working.
 
 // ── Meridian Feedback History ─────────────────────────────────────────────────
 // Show decisions that Meridian actually followed + outcomes received

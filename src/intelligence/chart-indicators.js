@@ -153,31 +153,6 @@ async function confirmTechnique(mint, technique, side = 'entry', interval = '15_
 }
 
 /**
- * Enrich limit_order candidates with indicator confirmations (parallel).
- * Attaches pool.lo_indicator (primary preset) and pool.lo_shadow (shadow A/B preset).
- * No-op when indicators disabled. Failures leave pool.lo_indicator with skipped=true.
- */
-async function enrichWithIndicators(candidates, cfg) {
-  const icfg = cfg.indicators || {}
-  if (!icfg.enabled || !Array.isArray(candidates) || !candidates.length) return
-  const primaryPreset = icfg.limitOrderEntryPreset || 'bb_plus_rsi'
-  const shadowPreset = icfg.limitOrderShadowPreset || 'supertrend_or_rsi'
-  const interval = (Array.isArray(icfg.intervals) && icfg.intervals[0]) || '15_MINUTE'
-  await Promise.allSettled(candidates.map(async (pool) => {
-    const mint = pool.base?.mint
-    if (!mint) return
-    const [primary, shadow] = await Promise.all([
-      confirmTechnique(mint, primaryPreset, 'entry', interval),
-      shadowPreset && shadowPreset !== primaryPreset
-        ? confirmTechnique(mint, shadowPreset, 'entry', interval)
-        : Promise.resolve(null),
-    ])
-    pool.lo_indicator = primary
-    pool.lo_shadow = shadow
-  }))
-}
-
-/**
  * Enrich spot candidates with an optional entry indicator (parallel, non-blocking).
  * Attaches pool.entry_indicator — confirmed=true gives a small confidence boost in processPool.
  * No-op when indicators disabled or spotEntryPreset not set. Failures → skipped=true (no block).
@@ -198,4 +173,4 @@ async function enrichSpotIndicators(candidates, cfg) {
   }))
 }
 
-module.exports = { evaluatePreset, signalScore, confirmTechnique, enrichWithIndicators, enrichSpotIndicators, buildSignalSummary }
+module.exports = { evaluatePreset, signalScore, confirmTechnique, enrichSpotIndicators, buildSignalSummary }
