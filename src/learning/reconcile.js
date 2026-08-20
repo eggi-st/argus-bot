@@ -17,6 +17,13 @@ function reconcilePatterns() {
   const minRealSamples = cfg.learning?.minRealSamples ?? 20
   const now = new Date().toISOString()
 
+  // Strategies the learner still tracks. limit_order was removed in the Tier-A prune, but its
+  // 1091 frozen dry_run_positions rows would otherwise keep being rolled up into pattern_library
+  // on every 6-hourly pass — recomputing cells for a strategy that can no longer be entered.
+  // spot_lo appears only in feedback_outcomes (it is a label Argus applies to Meridian's
+  // limit-order-placement reports, never an Argus decision), so listing it here is harmless.
+  const LEARNED = "'spot','bid_ask','spot_lo'"
+
   // SIM rollup — dry-run outcomes, keyed by the decision's bucket (the legacy source).
   // EXCLUDES no-fills (net=0 AND gross=0) so win_rate only covers positions where capital
   // was actually deployed. No-fills are tracked separately in nofill_count below.
@@ -32,6 +39,7 @@ function reconcilePatterns() {
     JOIN decisions d ON d.id = dr.decision_id
     WHERE dr.status = 'closed' AND dr.outcome_valid = 1 AND d.condition_bucket IS NOT NULL
       AND NOT (dr.net_pnl_pct = 0 AND dr.gross_pnl_pct = 0)
+      AND dr.strategy IN (${LEARNED})
     GROUP BY d.condition_bucket, dr.strategy
   `).all()
 
@@ -43,6 +51,7 @@ function reconcilePatterns() {
     JOIN decisions d ON d.id = dr.decision_id
     WHERE dr.status = 'closed' AND dr.outcome_valid = 1 AND d.condition_bucket IS NOT NULL
       AND dr.net_pnl_pct = 0 AND dr.gross_pnl_pct = 0
+      AND dr.strategy IN (${LEARNED})
     GROUP BY d.condition_bucket, dr.strategy
   `).all()
 
@@ -66,7 +75,7 @@ function reconcilePatterns() {
            SUM(CASE WHEN pnl_pct > 0 THEN pnl_pct ELSE 0 END) AS win_pnl_sum,
            SUM(CASE WHEN pnl_pct <= 0 THEN pnl_pct ELSE 0 END) AS loss_pnl_sum
     FROM feedback_outcomes
-    WHERE condition_bucket IS NOT NULL AND strategy IN ('spot','bid_ask','limit_order','spot_lo')
+    WHERE condition_bucket IS NOT NULL AND strategy IN (${LEARNED})
     GROUP BY condition_bucket, strategy
   `).all()
 
